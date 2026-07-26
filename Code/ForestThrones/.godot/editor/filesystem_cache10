@@ -1,5 +1,5 @@
 72322a848ab928aa5c89f0cb78209805
-::res://::1785092720
+::res://::1785093632
 icon.svg::CompressedTexture2D::8414136648250441771::1781455254::1785087954::1::::<><><>0<>0<>8154d9a1dc20c8bacbba736a35a1a6ad<>res://.godot/imported/icon.svg-218a8f2b3041327d8a5756f3a245f83b.ctex::
 README.md::TextFile::-1::1781456660::0::1::::<><><>0<>0<><>::
 ::res://assets/::1785088217
@@ -12,7 +12,7 @@ water_flow.gdshader::Shader::8080729558782773149::1785087815::0::1::::<><><>0<>0
 ::res://scenes/::1785088218
 ::res://scenes/beasts/::1785088217
 beast_animator.gd::GDScript::2955180382401058675::1785070358::0::1::::<>Node<><>0<>0<><>::
-beast_base.gd::GDScript::555768387254394138::1785089685::0::1::::<>CharacterBody3D<><>0<>0<><>::
+beast_base.gd::GDScript::555768387254394138::1785093495::0::1::::<>CharacterBody3D<><>0<>0<><>::
 beast_base.tscn::PackedScene::-1::1785034506::0::1::::<><><>0<>0<><>::res://scenes/beasts/beast_base.gd
 beast_factory.gd::GDScript::4654292738153094483::1785070292::0::1::::<>RefCounted<><>0<>0<><>::
 mutation_wave.gd::GDScript::6674841533459685538::1781446692::0::1::::<>Node<><>0<>0<><>::
@@ -158,8 +158,8 @@ traitor_system.gd::GDScript::4189118256331406880::1785031808::0::1::::<>Node<><>
 tutorial_manager.gd::GDScript::7539582608140656311::1783103532::0::1::::TutorialManager<>CanvasLayer<><>0<>0<><>::
 tutorial_manager.tscn::PackedScene::-1::1785038444::0::1::::<><><>0<>0<><>::res://scenes/tutorial/tutorial_manager.gd
 ::res://scenes/world/::1785088218
-map_generator.gd::GDScript::2046811533950451385::1785092674::0::1::::<>RefCounted<><>0<>0<><>::
-prop_factory.gd::GDScript::7454875431932124326::1785092615::0::1::::<>RefCounted<><>0<>0<><>::
+map_generator.gd::GDScript::2046811533950451385::1785093181::0::1::::<>RefCounted<><>0<>0<><>::
+prop_factory.gd::GDScript::7454875431932124326::1785093223::0::1::::<>RefCounted<><>0<>0<><>::
 world.gd::GDScript::5748333330546078672::1785037998::0::1::::<>Node3D<><>0<>0<><>::
 world.tscn::PackedScene::189919490168225811::1785038606::0::1::::<><><>0<>0<><>::res://scenes/world/world.gd
 ::res://scenes/zone_shrink/::1785088218
