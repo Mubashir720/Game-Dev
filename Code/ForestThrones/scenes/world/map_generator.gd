@@ -60,15 +60,16 @@ const BLEND_CLEARING := 6.0
 const BLEND_RIVERBANK := 3.0
 const BLEND_FOREST_FLOOR := 0.24 # baseline forest presence everywhere (lets forest bleed through)
 
-# Ground biome palette (Rich AAA Battle Royale dark fantasy colors)
-const COLOR_DROP_ZONE := Color(0.32, 0.24, 0.16)   # Warm packed dirt ring
-const COLOR_FOREST    := Color(0.10, 0.28, 0.12)   # Deep rich pine emerald green
-const COLOR_CLEARING  := Color(0.22, 0.54, 0.18)   # Vibrant Battle Royale meadow green
-const COLOR_RIVERBED  := Color(0.16, 0.22, 0.20)   # Wet dark river gravel
-const COLOR_HIGHLAND  := Color(0.26, 0.28, 0.30)   # Mountain slate granite stone
-const COLOR_SWAMP     := Color(0.14, 0.24, 0.12)   # Dark murky cypress green
-const COLOR_THRONE    := Color(0.12, 0.08, 0.18)   # Cursed obsidian basalt
-const COLOR_PATH      := Color(0.42, 0.30, 0.18)   # Rich golden soil trail
+# Ground biome palette (kept in one place so the shader-fed vertex colors and
+# any UI/minimap color keys stay in sync)
+const COLOR_DROP_ZONE := Color(0.24, 0.45, 0.22)
+const COLOR_FOREST := Color(0.15, 0.34, 0.18)
+const COLOR_CLEARING := Color(0.26, 0.50, 0.24)
+const COLOR_RIVERBED := Color(0.20, 0.28, 0.22)
+const COLOR_HIGHLAND := Color(0.38, 0.38, 0.35)
+const COLOR_SWAMP := Color(0.20, 0.28, 0.16)
+const COLOR_THRONE := Color(0.22, 0.18, 0.28)
+const COLOR_PATH := Color(0.34, 0.24, 0.16)
 
 const CLOSE_OFFSETS := [Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2)]
 const FAR_OFFSETS := [

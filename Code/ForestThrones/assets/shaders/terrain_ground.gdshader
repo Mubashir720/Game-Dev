@@ -2,14 +2,17 @@ shader_type spatial;
 render_mode blend_mix, cull_back, diffuse_burley, specular_schlick_ggx, world_vertex_coords;
 
 // ─────────────────────────────────────────────────────────────────────────
-//  TERRAIN GROUND SHADER v2 — AAA Dark Fantasy Battle Royale Shader
-//  Blends rich per-vertex biome colors with organic multi-frequency noise
-//  and slope-aware slate rock/mud layers for max visual depth.
+//  TERRAIN GROUND SHADER
+//  Consumes smoothly-blended per-vertex biome colors (baked in COLOR by the
+//  continuous terrain mesh builder) and layers procedural micro-detail on
+//  top so large flat regions never read as a single dead-flat tile color.
+//  Adds a faint triplanar rock bleed on steep slopes and a subtle sheen so
+//  wet/mossy areas catch light differently than dry clearings.
 // ─────────────────────────────────────────────────────────────────────────
 
-uniform float detail_strength : hint_range(0.0, 0.2) = 0.045;
-uniform float detail_scale : hint_range(1.0, 20.0) = 8.0;
-uniform float large_scale : hint_range(0.1, 5.0) = 1.2;
+uniform float detail_strength : hint_range(0.0, 0.2) = 0.055;
+uniform float detail_scale : hint_range(1.0, 20.0) = 6.0;
+uniform float large_scale : hint_range(0.1, 5.0) = 0.9;
 
 varying vec3 world_pos;
 varying vec3 world_normal;
@@ -48,18 +51,21 @@ void vertex() {
 void fragment() {
 	vec3 base = COLOR.rgb;
 
-	// Rich rolling micro-noise patches (natural sunlit moss vs shade variation)
-	float big = fbm(world_pos.xz * 0.08 * large_scale) - 0.5;
-	float fine = value_noise(world_pos.xz * detail_scale) - 0.5;
-	vec3 detailed = base + big * detail_strength * 1.5 + fine * detail_strength * 0.7;
+	// Large rolling blotches (patchy dry/lush grass variation, moss patches)
+	float big = fbm(world_pos.xz * 0.06 * large_scale) - 0.5;
 
-	// Natural slope stone bleed (only on steep cliff faces > 45 degrees, avoiding flat ground wash-out)
+	// Fine speckle so close-up ground never looks flat-painted
+	float fine = value_noise(world_pos.xz * detail_scale) - 0.5;
+
+	vec3 detailed = base + big * detail_strength * 1.6 + fine * detail_strength;
+
+	// Slope-aware rock bleed: steep faces show more bare rock/dirt regardless of biome
 	float slope = 1.0 - clamp(dot(normalize(world_normal), vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
-	vec3 rock_tint = vec3(0.22, 0.23, 0.25); // Dark slate granite stone
-	detailed = mix(detailed, rock_tint, smoothstep(0.42, 0.80, slope) * 0.65);
+	vec3 rock_tint = vec3(0.34, 0.33, 0.30);
+	detailed = mix(detailed, rock_tint, clamp(slope * 1.6 - 0.15, 0.0, 0.55));
 
 	ALBEDO = clamp(detailed, 0.0, 1.0);
-	ROUGHNESS = clamp(0.92 - slope * 0.20, 0.55, 0.96);
+	ROUGHNESS = clamp(0.95 - slope * 0.25, 0.55, 0.98);
 	METALLIC = 0.0;
 	SPECULAR = 0.25;
 }

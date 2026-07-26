@@ -1,5 +1,5 @@
 72322a848ab928aa5c89f0cb78209805
-::res://::1785088335
+::res://::1785089676
 icon.svg::CompressedTexture2D::8414136648250441771::1781455254::1785087954::1::::<><><>0<>0<>8154d9a1dc20c8bacbba736a35a1a6ad<>res://.godot/imported/icon.svg-218a8f2b3041327d8a5756f3a245f83b.ctex::
 README.md::TextFile::-1::1781456660::0::1::::<><><>0<>0<><>::
 ::res://assets/::1785088217
@@ -7,12 +7,12 @@ README.md::TextFile::-1::1781456660::0::1::::<><><>0<>0<><>::
 character_outline.gdshader::Shader::3401277480536070461::1785032980::0::1::::<><><>0<>0<><>::
 curse_aura.gdshader::Shader::54228114463605730::1785032992::0::1::::<><><>0<>0<><>::
 hit_flash.gdshader::Shader::3222550491609623020::1785032986::0::1::::<><><>0<>0<><>::
-terrain_ground.gdshader::Shader::225437151137219887::1785087591::0::1::::<><><>0<>0<><>::
+terrain_ground.gdshader::Shader::225437151137219887::1785089047::0::1::::<><><>0<>0<><>::
 water_flow.gdshader::Shader::8080729558782773149::1785087815::0::1::::<><><>0<>0<><>::
 ::res://scenes/::1785088218
 ::res://scenes/beasts/::1785088217
 beast_animator.gd::GDScript::2955180382401058675::1785070358::0::1::::<>Node<><>0<>0<><>::
-beast_base.gd::GDScript::555768387254394138::1785076952::0::1::::<>CharacterBody3D<><>0<>0<><>::
+beast_base.gd::GDScript::555768387254394138::1785089611::0::1::::<>CharacterBody3D<><>0<>0<><>::
 beast_base.tscn::PackedScene::-1::1785034506::0::1::::<><><>0<>0<><>::res://scenes/beasts/beast_base.gd
 beast_factory.gd::GDScript::4654292738153094483::1785070292::0::1::::<>RefCounted<><>0<>0<><>::
 mutation_wave.gd::GDScript::6674841533459685538::1781446692::0::1::::<>Node<><>0<>0<><>::
@@ -93,8 +93,8 @@ moments_engine.gd::GDScript::5604633805000703697::1785031828::0::1::::<>Node<><>
 character_animator.gd::GDScript::1768358606354034605::1785076976::0::1::::<>Node<><>0<>0<><>::
 character_factory.gd::GDScript::5538792679105741041::1785076386::0::1::::<>RefCounted<><>0<>0<><>::
 ghost_scout_3d.gd::GDScript::4612199035489813030::1785031966::0::1::::<>CharacterBody3D<><>0<>0<><>::
-player.gd::GDScript::602367706302991993::1785076942::0::1::::<>CharacterBody3D<><>0<>0<><>::
-player.tscn::PackedScene::-1::1785036832::0::1::::<><><>0<>0<><>::res://scenes/player/player.gd
+player.gd::GDScript::602367706302991993::1785089581::0::1::::<>CharacterBody3D<><>0<>0<><>::
+player.tscn::PackedScene::-1::1785089498::0::1::::<><><>0<>0<><>::res://scenes/player/player.gd
 player_stats.gd::GDScript::682132657205350709::1781443860::0::1::::<>RefCounted<><>0<>0<><>::
 ::res://scenes/player/states/::1785088218
 attack_state.gd::GDScript::5520192115868243096::1785033212::0::1::::<>PlayerState<><>0<>0<><>::
@@ -158,8 +158,8 @@ traitor_system.gd::GDScript::4189118256331406880::1785031808::0::1::::<>Node<><>
 tutorial_manager.gd::GDScript::7539582608140656311::1783103532::0::1::::TutorialManager<>CanvasLayer<><>0<>0<><>::
 tutorial_manager.tscn::PackedScene::-1::1785038444::0::1::::<><><>0<>0<><>::res://scenes/tutorial/tutorial_manager.gd
 ::res://scenes/world/::1785088218
-map_generator.gd::GDScript::2046811533950451385::1785087766::0::1::::<>RefCounted<><>0<>0<><>::
-prop_factory.gd::GDScript::7454875431932124326::1785084216::0::1::::<>RefCounted<><>0<>0<><>::
+map_generator.gd::GDScript::2046811533950451385::1785089472::0::1::::<>RefCounted<><>0<>0<><>::
+prop_factory.gd::GDScript::7454875431932124326::1785089047::0::1::::<>RefCounted<><>0<>0<><>::
 world.gd::GDScript::5748333330546078672::1785037998::0::1::::<>Node3D<><>0<>0<><>::
 world.tscn::PackedScene::189919490168225811::1785038606::0::1::::<><><>0<>0<><>::res://scenes/world/world.gd
 ::res://scenes/zone_shrink/::1785088218
