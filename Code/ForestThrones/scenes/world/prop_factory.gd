@@ -706,17 +706,17 @@ static func _build_wooden_bridge(span_length: float = 4.2) -> Node3D:
 		rail.position = Vector3(side * 1.0, 0.95, 0)
 		group.add_child(rail)
 
-	# Solid physics collision for bridge walking deck surface
+	# Solid physics collision for bridge walking deck surface (overlaps bank land at ends for smooth entry)
 	var deck_col := CollisionShape3D.new()
-	var deck_box := BoxShape3D.new(); deck_box.size = Vector3(2.0, 0.20, span_length)
-	deck_col.shape = deck_box; deck_col.position = Vector3(0, 0.15, 0)
+	var deck_box := BoxShape3D.new(); deck_box.size = Vector3(2.2, 0.12, span_length + 1.4)
+	deck_col.shape = deck_box; deck_col.position = Vector3(0, -0.04, 0)
 	group.add_child(deck_col)
 
-	# Solid physics collision for side guardrails (prevents walking off bridge borders)
+	# Solid physics collision for side guardrails (left & right side borders)
 	for side in [-1, 1]:
 		var rail_col := CollisionShape3D.new()
-		var rail_box := BoxShape3D.new(); rail_box.size = Vector3(0.20, 0.80, span_length)
-		rail_col.shape = rail_box; rail_col.position = Vector3(side * 1.05, 0.65, 0)
+		var rail_box := BoxShape3D.new(); rail_box.size = Vector3(0.30, 1.20, span_length + 0.6)
+		rail_col.shape = rail_box; rail_col.position = Vector3(side * 1.15, 0.60, 0)
 		group.add_child(rail_col)
 
 	return group

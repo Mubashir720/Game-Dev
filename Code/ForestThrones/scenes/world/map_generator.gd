@@ -147,8 +147,12 @@ func generate(world_node: Node3D) -> void:
 
 	# 1. Pre-pass: compute zone + height for every cell ONCE, cache both.
 	#    (v2 called determine_zone twice per tile during generation; caching here
-	#    also lets the border-blend logic do cheap dictionary lookups instead of
-	#    re-running the zone classifier for every neighbor check.)
+	# 1. Pre-calculate the road network: center cross-roads + 8 radial roads
+	#    connecting every drop zone to the throne, so every part of the map is
+	#    physically reachable by land instead of isolated behind a river band.
+	var path_cells := _calculate_path_network(grid_size, center_grid, _drop_coords)
+
+	# 2. Pre-pass: compute zone + height for every cell ONCE, cache both.
 	var zone_grid := {}
 	var height_grid := {}
 	for y in range(grid_size.y):
@@ -156,12 +160,7 @@ func generate(world_node: Node3D) -> void:
 			var gp := Vector2i(x, y)
 			var z = determine_zone(gp, grid_size)
 			zone_grid[gp] = z
-			height_grid[gp] = _calculate_height(x, y, z)
-
-	# 2. Pre-calculate the road network: center cross-roads + 8 radial roads
-	#    connecting every drop zone to the throne, so every part of the map is
-	#    physically reachable by land instead of isolated behind a river band.
-	var path_cells := _calculate_path_network(grid_size, center_grid, _drop_coords)
+			height_grid[gp] = _calculate_height(x, y, z, path_cells)
 
 	# 2b. ONE continuous heightmapped ground mesh for the whole map — replaces the
 	#     old 40,000-separate-flat-tile + vertical-skirt-box approach entirely, so
@@ -400,11 +399,11 @@ func _generate_river_water_mesh(water_container: Node3D, grid_size: Vector2i, ti
 
 			var seg := MeshInstance3D.new()
 			var plane := PlaneMesh.new()
-			plane.size = Vector2(w * tile_dim.x, float(y_end - y) * tile_dim.y + 0.15)
+			plane.size = Vector2((w + 0.8) * tile_dim.x, float(y_end - y) * tile_dim.y + 0.30)
 			seg.mesh = plane
 			seg.material_override = water_mat
 			seg.position = Vector3(
-				(cx - center_grid.x) * tile_dim.x, -0.28,
+				(cx - center_grid.x) * tile_dim.x, -0.22,
 				(y_mid - center_grid.y) * tile_dim.y)
 			water_container.add_child(seg)
 			y += segment_span
@@ -477,7 +476,7 @@ func _generate_bridges(container: Node3D, grid_size: Vector2i, tile_dim: Vector2
 			var dir = (b - a).normalized()
 			var span = max(10.0, _river_width(c.y, -1 if c.x < center_grid.x else 1) * tile_dim.x * 1.4)
 			var bridge = PropFactory.build_wooden_bridge(span)
-			bridge.position = Vector3((c.x - center_grid.x) * tile_dim.x, 0.05, (c.y - center_grid.y) * tile_dim.y)
+			bridge.position = Vector3((c.x - center_grid.x) * tile_dim.x, 0.0, (c.y - center_grid.y) * tile_dim.y)
 			bridge.rotation.y = atan2(dir.x, dir.y)
 			container.add_child(bridge)
 
@@ -508,28 +507,47 @@ func _find_river_crossings(a: Vector2, b: Vector2) -> Array:
 #  ELEVATION — rolling hills layered under every biome, not just the highlands
 # ═══════════════════════════════════════════════════════════════════════════════
 
-func _calculate_height(x: int, y: int, zone: Constants.ZoneType) -> float:
+func _river_distance(pos: Vector2) -> float:
+	var min_d := 9999.0
+	for side in [-1, 1]:
+		var cx = _river_center(pos.y, side)
+		var w = _river_width(pos.y, side)
+		var d = abs(pos.x - cx) - (w * 0.5)
+		min_d = min(min_d, d)
+	return min_d
+
+
+func _calculate_height(x: int, y: int, zone: Constants.ZoneType, path_cells: Dictionary = {}) -> float:
 	var base_n = _elev_noise.get_noise_2d(float(x), float(y))
 	var det_n = _detail_noise.get_noise_2d(float(x), float(y)) * 0.10
 	var hill_n = max(_hill_noise.get_noise_2d(float(x), float(y)), 0.0) # only positive lobes read as hills
 
+	var base_h := 0.0
 	match zone:
 		Constants.ZoneType.ROCKY_HIGHLANDS:
-			return 0.6 + abs(base_n) * 1.3 + det_n + hill_n * 0.6
+			base_h = 0.6 + abs(base_n) * 1.3 + det_n + hill_n * 0.6
 		Constants.ZoneType.CURSED_THRONE:
-			return 0.4
+			base_h = 0.4
 		Constants.ZoneType.RIVERBED:
-			return -0.55
+			base_h = -0.48
 		Constants.ZoneType.SWAMP:
-			return -0.06 + base_n * 0.10
+			base_h = -0.06 + base_n * 0.10
 		Constants.ZoneType.DENSE_FOREST:
-			return abs(base_n) * 0.35 + det_n + hill_n * 1.4
+			base_h = abs(base_n) * 0.35 + det_n + hill_n * 1.4
 		Constants.ZoneType.OPEN_CLEARING:
-			return abs(det_n * 0.5) + hill_n * 1.1
+			base_h = abs(det_n * 0.5) + hill_n * 1.1
 		Constants.ZoneType.DROP_ZONE:
-			return hill_n * 0.4
+			base_h = hill_n * 0.4
 		_:
-			return hill_n * 0.9
+			base_h = hill_n * 0.9
+
+	# Continuous smooth riverbank slope into riverbed trench
+	var r_dist = _river_distance(Vector2(float(x), float(y)))
+	if r_dist < 4.0:
+		var bank_factor = clamp((r_dist + 1.0) / 5.0, 0.0, 1.0)
+		return lerp(-0.48, base_h, bank_factor)
+
+	return base_h
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

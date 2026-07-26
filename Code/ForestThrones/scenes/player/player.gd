@@ -34,6 +34,8 @@ func _ready() -> void:
 	# Layer 2 = Entities (Player / NPCs / Beasts)
 	collision_layer = 1 | 2
 	collision_mask = 1 | 2 | 4 | 8 | 16
+	floor_max_angle = deg_to_rad(60.0)
+	floor_snap_length = 0.35
 
 	var archetype_id = GameManager.selected_archetype_id if GameManager.selected_archetype_id != "" else "warlord"
 	character_visual = CharacterFactory.create_character_by_archetype(archetype_id)
