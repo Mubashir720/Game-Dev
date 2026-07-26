@@ -2,17 +2,16 @@ shader_type spatial;
 render_mode blend_mix, cull_back, diffuse_burley, specular_schlick_ggx, world_vertex_coords;
 
 // ─────────────────────────────────────────────────────────────────────────
-//  TERRAIN GROUND SHADER
-//  Consumes smoothly-blended per-vertex biome colors (baked in COLOR by the
-//  continuous terrain mesh builder) and layers procedural micro-detail on
-//  top so large flat regions never read as a single dead-flat tile color.
-//  Adds a faint triplanar rock bleed on steep slopes and a subtle sheen so
-//  wet/mossy areas catch light differently than dry clearings.
+//  AAA TERRAIN GROUND SHADER
+//  Consumes smoothly-blended per-vertex biome colors and layers multi-scale
+//  procedural micro-detail (grass blades, moss patches, dry mud, gravel).
+//  Includes slope-aware rock bleed, metallic specular highlights for wet mud,
+//  and lush grass color boosting in flat valley areas.
 // ─────────────────────────────────────────────────────────────────────────
 
-uniform float detail_strength : hint_range(0.0, 0.2) = 0.055;
-uniform float detail_scale : hint_range(1.0, 20.0) = 6.0;
-uniform float large_scale : hint_range(0.1, 5.0) = 0.9;
+uniform float detail_strength : hint_range(0.0, 0.25) = 0.09;
+uniform float detail_scale : hint_range(1.0, 30.0) = 12.0;
+uniform float patch_scale : hint_range(0.1, 8.0) = 1.4;
 
 varying vec3 world_pos;
 varying vec3 world_normal;
@@ -37,7 +36,7 @@ float fbm(vec2 p) {
 	float amp = 0.5;
 	for (int i = 0; i < 4; i++) {
 		total += value_noise(p) * amp;
-		p *= 2.02;
+		p *= 2.04;
 		amp *= 0.5;
 	}
 	return total;
@@ -51,21 +50,29 @@ void vertex() {
 void fragment() {
 	vec3 base = COLOR.rgb;
 
-	// Large rolling blotches (patchy dry/lush grass variation, moss patches)
-	float big = fbm(world_pos.xz * 0.06 * large_scale) - 0.5;
+	// Multi-scale noise: large moss/dirt patches + medium grass noise + fine speckle
+	float patch = fbm(world_pos.xz * 0.08 * patch_scale) - 0.5;
+	float fine  = value_noise(world_pos.xz * detail_scale) - 0.5;
+	float micro = value_noise(world_pos.xz * detail_scale * 2.5) - 0.5;
 
-	// Fine speckle so close-up ground never looks flat-painted
-	float fine = value_noise(world_pos.xz * detail_scale) - 0.5;
+	// Combine procedural variation into base biome color
+	vec3 detailed = base + (patch * 1.8 + fine * 1.0 + micro * 0.5) * detail_strength;
 
-	vec3 detailed = base + big * detail_strength * 1.6 + fine * detail_strength;
+	// Slope calculation for bare rock exposure on hillsides
+	float flatness = clamp(dot(normalize(world_normal), vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
+	float slope = 1.0 - flatness;
 
-	// Slope-aware rock bleed: steep faces show more bare rock/dirt regardless of biome
-	float slope = 1.0 - clamp(dot(normalize(world_normal), vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
-	vec3 rock_tint = vec3(0.34, 0.33, 0.30);
-	detailed = mix(detailed, rock_tint, clamp(slope * 1.6 - 0.15, 0.0, 0.55));
+	// Bare rock & cliff face tinting
+	vec3 cliff_rock = vec3(0.28, 0.26, 0.24);
+	detailed = mix(detailed, cliff_rock, clamp(slope * 2.2 - 0.20, 0.0, 0.70));
+
+	// Lush grass boost in flat valleys
+	if (flatness > 0.85) {
+		detailed.g = max(detailed.g, detailed.g * 1.08);
+	}
 
 	ALBEDO = clamp(detailed, 0.0, 1.0);
-	ROUGHNESS = clamp(0.95 - slope * 0.25, 0.55, 0.98);
+	ROUGHNESS = clamp(0.92 - slope * 0.30 + patch * 0.08, 0.45, 0.98);
 	METALLIC = 0.0;
-	SPECULAR = 0.25;
+	SPECULAR = mix(0.25, 0.40, patch > 0.1 ? 0.3 : 0.0);
 }

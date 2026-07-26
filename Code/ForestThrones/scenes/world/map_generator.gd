@@ -60,16 +60,15 @@ const BLEND_CLEARING := 6.0
 const BLEND_RIVERBANK := 3.0
 const BLEND_FOREST_FLOOR := 0.24 # baseline forest presence everywhere (lets forest bleed through)
 
-# Ground biome palette (kept in one place so the shader-fed vertex colors and
-# any UI/minimap color keys stay in sync)
-const COLOR_DROP_ZONE := Color(0.24, 0.45, 0.22)
-const COLOR_FOREST := Color(0.15, 0.34, 0.18)
-const COLOR_CLEARING := Color(0.26, 0.50, 0.24)
-const COLOR_RIVERBED := Color(0.20, 0.28, 0.22)
-const COLOR_HIGHLAND := Color(0.38, 0.38, 0.35)
-const COLOR_SWAMP := Color(0.20, 0.28, 0.16)
-const COLOR_THRONE := Color(0.22, 0.18, 0.28)
-const COLOR_PATH := Color(0.34, 0.24, 0.16)
+# Ground biome palette — rich saturated tones (no washed-out whitish grass)
+const COLOR_DROP_ZONE := Color(0.18, 0.38, 0.14)
+const COLOR_FOREST    := Color(0.12, 0.28, 0.10) # Rich deep mossy forest green
+const COLOR_CLEARING  := Color(0.22, 0.48, 0.16) # Sunlit lush green meadow
+const COLOR_RIVERBED  := Color(0.16, 0.22, 0.12) # Dark wet river mud
+const COLOR_HIGHLAND  := Color(0.32, 0.30, 0.26) # Dark weathered granite slate
+const COLOR_SWAMP     := Color(0.14, 0.22, 0.10) # Dark murky wetland
+const COLOR_THRONE    := Color(0.16, 0.10, 0.22) # Deep obsidian black
+const COLOR_PATH      := Color(0.30, 0.22, 0.14) # Rich worn dirt trail
 
 const CLOSE_OFFSETS := [Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2)]
 const FAR_OFFSETS := [
@@ -220,40 +219,64 @@ func generate(world_node: Node3D) -> void:
 			elif not is_path:
 				_spawn_ground_scatter(scatter_container, zone, Vector3(world_x, world_y, world_z), grass_mat, flower_colors, pebble_mat)
 
-			# Environment Props — density fades out near biome borders instead of
-			# cutting off hard, so forest doesn't just stop dead against a clearing.
+			# Path-lining Environmental Objects (Torch posts, lanterns, carts, signs along roads)
+			if is_path and (x % 14 == 0 or y % 14 == 0) and randf() < 0.35:
+				var path_prop: Node3D = null
+				var pr = randf()
+				if pr < 0.45: path_prop = PropFactory.build_torch_post()
+				elif pr < 0.70: path_prop = PropFactory.build_hanging_lantern_post()
+				elif pr < 0.85: path_prop = PropFactory.build_warning_sign()
+				else: path_prop = PropFactory.build_abandoned_cart()
+
+				if path_prop:
+					path_prop.position = Vector3(world_x + (randf() - 0.5) * 1.2, world_y, world_z + (randf() - 0.5) * 1.2)
+					props_container.add_child(path_prop)
+
+			# Environment Props & Trees — High density (0.11 base rate) with 6 tree types & environmental storytelling
 			if zone != Constants.ZoneType.CURSED_THRONE and zone != Constants.ZoneType.DROP_ZONE and zone != Constants.ZoneType.RIVERBED and not is_path:
 				var border_info = _neighbor_zone_info(grid_pos, zone, zone_grid)
-				var density_scale = 1.0 - border_info.blend * 0.55
-				if randf() < 0.06 * density_scale:
+				var density_scale = 1.0 - border_info.blend * 0.40
+				if randf() < 0.11 * density_scale:
 					var prop_node: Node3D = null
 					var r = randf()
 
 					match zone:
 						Constants.ZoneType.DENSE_FOREST:
-							if r < 0.42: prop_node = PropFactory.build_tree("pine")
-							elif r < 0.68: prop_node = PropFactory.build_tree("oak")
-							elif r < 0.84: prop_node = PropFactory.build_tree("canopy")
-							elif r < 0.94: prop_node = PropFactory.build_fern_cluster()
+							if r < 0.28: prop_node = PropFactory.build_tree("pine")
+							elif r < 0.48: prop_node = PropFactory.build_tree("oak")
+							elif r < 0.62: prop_node = PropFactory.build_tree("birch")
+							elif r < 0.72: prop_node = PropFactory.build_dense_bush()
+							elif r < 0.80: prop_node = PropFactory.build_tree("canopy")
+							elif r < 0.87: prop_node = PropFactory.build_vine_stump()
+							elif r < 0.93: prop_node = PropFactory.build_fern_cluster()
+							elif r < 0.97: prop_node = PropFactory.build_vine_archway()
 							else: prop_node = PropFactory.build_fallen_log()
 
 						Constants.ZoneType.OPEN_CLEARING:
-							if r < 0.35: prop_node = PropFactory.build_berry_bush()
-							elif r < 0.60: prop_node = PropFactory.build_tree("oak")
-							elif r < 0.85: prop_node = PropFactory.build_rock("boulder")
-							else: prop_node = PropFactory.build_trail_marker() if randf() < 0.15 else PropFactory.build_berry_bush()
+							if r < 0.25: prop_node = PropFactory.build_tree("birch")
+							elif r < 0.45: prop_node = PropFactory.build_tree("oak")
+							elif r < 0.62: prop_node = PropFactory.build_dense_bush()
+							elif r < 0.75: prop_node = PropFactory.build_berry_bush()
+							elif r < 0.85: prop_node = PropFactory.build_tall_grass()
+							elif r < 0.92: prop_node = PropFactory.build_rock("mossy")
+							elif r < 0.97: prop_node = PropFactory.build_rock("boulder")
+							else: prop_node = PropFactory.build_broken_weapons()
 
 						Constants.ZoneType.ROCKY_HIGHLANDS:
-							if r < 0.40: prop_node = PropFactory.build_rock("boulder")
-							elif r < 0.65: prop_node = PropFactory.build_rock("ore_vein")
+							if r < 0.35: prop_node = PropFactory.build_rock("boulder")
+							elif r < 0.55: prop_node = PropFactory.build_rock("mossy")
+							elif r < 0.72: prop_node = PropFactory.build_rock("ore_vein")
 							elif r < 0.85: prop_node = PropFactory.build_rock("cluster")
+							elif r < 0.93: prop_node = PropFactory.build_animal_skull()
 							else: prop_node = PropFactory.build_hill_rock_pile()
 
 						Constants.ZoneType.SWAMP:
-							if r < 0.34: prop_node = PropFactory.build_tree("dead")
-							elif r < 0.62: prop_node = PropFactory.build_herb_plant()
-							elif r < 0.85: prop_node = PropFactory.build_mushroom_cluster()
-							else: prop_node = PropFactory.build_reed_cluster()
+							if r < 0.28: prop_node = PropFactory.build_tree("willow")
+							elif r < 0.52: prop_node = PropFactory.build_tree("dead")
+							elif r < 0.68: prop_node = PropFactory.build_herb_plant()
+							elif r < 0.82: prop_node = PropFactory.build_mushroom_cluster()
+							elif r < 0.92: prop_node = PropFactory.build_reed_cluster()
+							else: prop_node = PropFactory.build_bone_pile()
 
 					if prop_node:
 						prop_node.position = Vector3(world_x, world_y, world_z)
@@ -306,6 +329,15 @@ func generate(world_node: Node3D) -> void:
 	var v2 = PropFactory.build_vendor_stall(false)
 	v2.position = Vector3(40 * tile_dim.x, 0.0, 0.0)
 	props_container.add_child(v2)
+
+	# 12. Ancient Stone Circles (Ritual site landmarks in clearings)
+	var sc1 = PropFactory.build_stone_circle()
+	sc1.position = Vector3(-30 * tile_dim.x, 0.0, -30 * tile_dim.y)
+	props_container.add_child(sc1)
+
+	var sc2 = PropFactory.build_stone_circle()
+	sc2.position = Vector3(30 * tile_dim.x, 0.0, 30 * tile_dim.y)
+	props_container.add_child(sc2)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -372,7 +404,7 @@ func _generate_river_water_mesh(water_container: Node3D, grid_size: Vector2i, ti
 			seg.mesh = plane
 			seg.material_override = water_mat
 			seg.position = Vector3(
-				(cx - center_grid.x) * tile_dim.x, -0.06,
+				(cx - center_grid.x) * tile_dim.x, -0.28,
 				(y_mid - center_grid.y) * tile_dim.y)
 			water_container.add_child(seg)
 			y += segment_span
@@ -487,7 +519,7 @@ func _calculate_height(x: int, y: int, zone: Constants.ZoneType) -> float:
 		Constants.ZoneType.CURSED_THRONE:
 			return 0.4
 		Constants.ZoneType.RIVERBED:
-			return -0.18
+			return -0.55
 		Constants.ZoneType.SWAMP:
 			return -0.06 + base_n * 0.10
 		Constants.ZoneType.DENSE_FOREST:
@@ -579,11 +611,23 @@ func _build_terrain_mesh(container: Node3D, grid_size: Vector2i, tile_dim: Vecto
 	st.generate_tangents()
 	var mesh := st.commit()
 
+	var static_body := StaticBody3D.new()
+	static_body.name = "ContinuousTerrainBody"
+	static_body.collision_layer = 1
+	static_body.collision_mask = 1
+
 	var mesh_inst := MeshInstance3D.new()
 	mesh_inst.mesh = mesh
 	mesh_inst.material_override = _build_terrain_shader_material()
-	mesh_inst.name = "ContinuousTerrain"
-	container.add_child(mesh_inst)
+	mesh_inst.name = "ContinuousTerrainMesh"
+	static_body.add_child(mesh_inst)
+
+	# Generate exact 3D trimesh physics collision shape for full terrain!
+	var col_shape := CollisionShape3D.new()
+	col_shape.shape = mesh.create_trimesh_shape()
+	static_body.add_child(col_shape)
+
+	container.add_child(static_body)
 
 
 func _add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, ca: Color, cb: Color, cc: Color) -> void:
@@ -729,16 +773,28 @@ func _spawn_ground_scatter(container: Node3D, zone: Constants.ZoneType, pos: Vec
 	var rng = randf()
 
 	if zone == Constants.ZoneType.OPEN_CLEARING or zone == Constants.ZoneType.DENSE_FOREST or zone == Constants.ZoneType.DROP_ZONE:
-		if rng < 0.28:
+		if rng < 0.42:
 			var tuft := Node3D.new()
-			for i in range(4):
+			for i in range(5):
 				var blade := MeshInstance3D.new()
 				var bm := BoxMesh.new()
-				bm.size = Vector3(0.02, 0.16 + randf() * 0.08, 0.01)
+				bm.size = Vector3(0.025, 0.18 + randf() * 0.10, 0.012)
 				blade.mesh = bm; blade.material_override = grass_mat
-				var ang = (i / 4.0) * TAU
-				blade.position = Vector3(cos(ang) * 0.04, bm.size.y * 0.5, sin(ang) * 0.04)
+				var ang = (i / 5.0) * TAU
+				blade.position = Vector3(cos(ang) * 0.05, bm.size.y * 0.5, sin(ang) * 0.05)
 				tuft.add_child(blade)
+
+			# Wildflower blossom
+			if randf() < 0.18:
+				var flower := MeshInstance3D.new()
+				var fm := SphereMesh.new(); fm.radius = 0.035; fm.height = 0.04
+				flower.mesh = fm
+				var fmat := StandardMaterial3D.new()
+				fmat.albedo_color = flower_colors[randi() % flower_colors.size()]
+				flower.material_override = fmat
+				flower.position = Vector3(0, 0.22, 0)
+				tuft.add_child(flower)
+
 			var off_x = (randf() - 0.5) * 1.4
 			var off_z = (randf() - 0.5) * 1.4
 			tuft.position = pos + Vector3(off_x, 0, off_z)

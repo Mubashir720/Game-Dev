@@ -10,21 +10,29 @@ static func build_tree(tree_type: String = "pine") -> Node3D:
 	match tree_type.to_lower():
 		"pine":   return _build_pine_tree()
 		"oak":    return _build_oak_tree()
+		"birch":  return _build_birch_tree()
+		"willow": return _build_willow_tree()
 		"dead":   return _build_dead_tree()
-		"canopy": return _build_canopy_tree() # High dense canopy tree for borders
+		"canopy": return _build_canopy_tree()
 		_:        return _build_pine_tree()
 
 static func build_rock(rock_type: String = "boulder") -> Node3D:
 	match rock_type.to_lower():
 		"boulder":  return _build_boulder()
 		"cluster":  return _build_rock_cluster()
+		"mossy":    return _build_mossy_rock()
 		"ore_vein": return _build_ore_vein()
 		_:          return _build_boulder()
 
 static func build_berry_bush() -> Node3D: return _build_berry_bush()
+static func build_dense_bush() -> Node3D: return _build_dense_bush()
 static func build_herb_plant() -> Node3D: return _build_herb_plant()
 static func build_mushroom_cluster() -> Node3D: return _build_mushroom_cluster()
 static func build_fallen_log() -> Node3D: return _build_fallen_log()
+static func build_vine_stump() -> Node3D: return _build_vine_stump()
+static func build_tall_grass() -> Node3D: return _build_tall_grass_patch()
+static func build_mossy_rock() -> Node3D: return _build_mossy_rock()
+
 static func build_crate() -> Node3D: return _build_shipment_crate()
 static func build_cursed_throne() -> Node3D: return _build_cursed_throne_landmark()
 static func build_vendor_stall(is_black_market: bool = false) -> Node3D: return _build_vendor_stall(is_black_market)
@@ -37,6 +45,18 @@ static func build_lily_pad() -> Node3D: return _build_lily_pad()
 static func build_fern_cluster() -> Node3D: return _build_fern_cluster()
 static func build_hill_rock_pile() -> Node3D: return _build_hill_rock_pile()
 static func build_trail_marker() -> Node3D: return _build_trail_marker()
+
+# Environmental Storytelling Props
+static func build_abandoned_cart() -> Node3D: return _build_abandoned_cart()
+static func build_animal_skull() -> Node3D: return _build_animal_skull()
+static func build_torch_post() -> Node3D: return _build_torch_post()
+static func build_stone_circle() -> Node3D: return _build_stone_circle()
+static func build_broken_weapons() -> Node3D: return _build_broken_weapons()
+static func build_hanging_lantern_post() -> Node3D: return _build_hanging_lantern_post()
+static func build_warning_sign() -> Node3D: return _build_warning_sign()
+static func build_bone_pile() -> Node3D: return _build_bone_pile()
+static func build_fallen_banner() -> Node3D: return _build_fallen_banner()
+static func build_vine_archway() -> Node3D: return _build_vine_archway()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -607,8 +627,9 @@ static func _build_beast_skeleton() -> Node3D:
 # sized dynamically per-crossing so it always fully clears the river's water,
 # and the whole node is rotated to face the actual crossing direction.)
 static func _build_wooden_bridge(span_length: float = 4.2) -> Node3D:
-	var group := Node3D.new()
+	var group := StaticBody3D.new()
 	group.name = "Prop_WoodenBridge"
+	group.collision_layer = 1; group.collision_mask = 3
 
 	var wood_mat := StandardMaterial3D.new()
 	wood_mat.albedo_color = Color(0.38, 0.26, 0.16)
@@ -684,6 +705,19 @@ static func _build_wooden_bridge(span_length: float = 4.2) -> Node3D:
 		rail.mesh = rm; rail.material_override = wood_mat
 		rail.position = Vector3(side * 1.0, 0.95, 0)
 		group.add_child(rail)
+
+	# Solid physics collision for bridge walking deck surface
+	var deck_col := CollisionShape3D.new()
+	var deck_box := BoxShape3D.new(); deck_box.size = Vector3(2.0, 0.20, span_length)
+	deck_col.shape = deck_box; deck_col.position = Vector3(0, 0.15, 0)
+	group.add_child(deck_col)
+
+	# Solid physics collision for side guardrails (prevents walking off bridge borders)
+	for side in [-1, 1]:
+		var rail_col := CollisionShape3D.new()
+		var rail_box := BoxShape3D.new(); rail_box.size = Vector3(0.20, 0.80, span_length)
+		rail_col.shape = rail_box; rail_col.position = Vector3(side * 1.05, 0.65, 0)
+		group.add_child(rail_col)
 
 	return group
 
@@ -895,3 +929,515 @@ static func _build_vendor_stall(is_black_market: bool = false) -> Node3D:
 	group.add_child(col)
 
 	return group
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  NEW TREE VARIETIES & PLANTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+static func _build_birch_tree() -> Node3D:
+	var group := StaticBody3D.new()
+	group.name = "Prop_BirchTree"
+	group.collision_layer = 1; group.collision_mask = 3
+
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = Color(0.92, 0.90, 0.86); trunk_mat.roughness = 0.65
+
+	var notch_mat := StandardMaterial3D.new()
+	notch_mat.albedo_color = Color(0.12, 0.10, 0.08); notch_mat.roughness = 0.95
+
+	var leaf_mat := StandardMaterial3D.new()
+	leaf_mat.albedo_color = Color(0.38, 0.62, 0.18); leaf_mat.roughness = 0.75
+
+	# Slender white trunk
+	var trunk := MeshInstance3D.new()
+	var tm := CylinderMesh.new(); tm.top_radius = 0.12; tm.bottom_radius = 0.18; tm.height = 3.6
+	trunk.mesh = tm; trunk.material_override = trunk_mat; trunk.position.y = 1.8
+	trunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	group.add_child(trunk)
+
+	# Black bark notches
+	for i in range(5):
+		var notch := MeshInstance3D.new()
+		var nm := BoxMesh.new(); nm.size = Vector3(0.28, 0.04, 0.28)
+		notch.mesh = nm; notch.material_override = notch_mat
+		notch.position = Vector3(0, 0.6 + i * 0.6, 0)
+		notch.rotation.y = (i * 1.3)
+		group.add_child(notch)
+
+	# Golden/lime leaf clusters
+	for i in range(3):
+		var canopy := MeshInstance3D.new()
+		var cm := SphereMesh.new()
+		cm.radius = 1.1 - i * 0.2; cm.height = 1.4 - i * 0.25
+		canopy.mesh = cm; canopy.material_override = leaf_mat
+		canopy.position = Vector3((i % 2 - 0.5) * 0.4, 2.6 + i * 0.7, 0)
+		canopy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		group.add_child(canopy)
+
+	var col := CollisionShape3D.new()
+	var cyl := CylinderShape3D.new(); cyl.radius = 0.25; cyl.height = 3.6
+	col.shape = cyl; col.position.y = 1.8
+	group.add_child(col)
+
+	return group
+
+
+static func _build_willow_tree() -> Node3D:
+	var group := StaticBody3D.new()
+	group.name = "Prop_WillowTree"
+	group.collision_layer = 1; group.collision_mask = 3
+
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = Color(0.24, 0.16, 0.10); trunk_mat.roughness = 0.95
+
+	var leaf_mat := StandardMaterial3D.new()
+	leaf_mat.albedo_color = Color(0.18, 0.42, 0.20); leaf_mat.roughness = 0.80
+
+	# Thick gnarled trunk
+	var trunk := MeshInstance3D.new()
+	var tm := CylinderMesh.new(); tm.top_radius = 0.32; tm.bottom_radius = 0.48; tm.height = 2.8
+	trunk.mesh = tm; trunk.material_override = trunk_mat; trunk.position.y = 1.4
+	trunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	group.add_child(trunk)
+
+	# Wide canopy dome
+	var dome := MeshInstance3D.new()
+	var dm := SphereMesh.new(); dm.radius = 2.2; dm.height = 1.8
+	dome.mesh = dm; dome.material_override = leaf_mat; dome.position.y = 2.8
+	dome.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	group.add_child(dome)
+
+	# Drooping leaf curtain strands
+	for i in range(8):
+		var ang = (i / 8.0) * TAU
+		var strand := MeshInstance3D.new()
+		var sm := CylinderMesh.new(); sm.top_radius = 0.15; sm.bottom_radius = 0.05; sm.height = 2.2
+		strand.mesh = sm; strand.material_override = leaf_mat
+		strand.position = Vector3(cos(ang) * 1.8, 1.8, sin(ang) * 1.8)
+		group.add_child(strand)
+
+	var col := CollisionShape3D.new()
+	var cyl := CylinderShape3D.new(); cyl.radius = 0.45; cyl.height = 2.8
+	col.shape = cyl; col.position.y = 1.4
+	group.add_child(col)
+
+	return group
+
+
+static func _build_dense_bush() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Prop_DenseBush"
+
+	var leaf_mat := StandardMaterial3D.new()
+	leaf_mat.albedo_color = Color(0.14, 0.38, 0.16); leaf_mat.roughness = 0.85
+
+	for i in range(4):
+		var lobe := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.45 + randf() * 0.15; sm.height = sm.radius * 1.6
+		lobe.mesh = sm; lobe.material_override = leaf_mat
+		var ang = (i / 4.0) * TAU
+		lobe.position = Vector3(cos(ang) * 0.25, sm.radius * 0.8, sin(ang) * 0.25)
+		lobe.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		group.add_child(lobe)
+
+	return group
+
+
+static func _build_tall_grass_patch() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Prop_TallGrass"
+
+	var grass_mat := StandardMaterial3D.new()
+	grass_mat.albedo_color = Color(0.28, 0.52, 0.22); grass_mat.roughness = 0.80
+
+	for i in range(10):
+		var blade := MeshInstance3D.new()
+		var bm := BoxMesh.new(); bm.size = Vector3(0.03, 0.45 + randf() * 0.25, 0.015)
+		blade.mesh = bm; blade.material_override = grass_mat
+		var ang = (i / 10.0) * TAU
+		var r = 0.08 + randf() * 0.12
+		blade.position = Vector3(cos(ang) * r, bm.size.y * 0.5, sin(ang) * r)
+		blade.rotation.y = randf() * TAU
+		blade.rotation.z = deg_to_rad(randf_range(-12.0, 12.0))
+		group.add_child(blade)
+
+	return group
+
+
+static func _build_vine_stump() -> Node3D:
+	var group := StaticBody3D.new()
+	group.name = "Prop_VineStump"
+	group.collision_layer = 1; group.collision_mask = 3
+
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.albedo_color = Color(0.28, 0.18, 0.12); wood_mat.roughness = 0.95
+
+	var vine_mat := StandardMaterial3D.new()
+	vine_mat.albedo_color = Color(0.18, 0.44, 0.16); vine_mat.roughness = 0.80
+
+	# Hollow stump body
+	var stump := MeshInstance3D.new()
+	var cm := CylinderMesh.new(); cm.top_radius = 0.40; cm.bottom_radius = 0.52; cm.height = 0.70
+	stump.mesh = cm; stump.material_override = wood_mat; stump.position.y = 0.35
+	stump.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	group.add_child(stump)
+
+	# Ivy vines wrapped around stump
+	for i in range(5):
+		var vine := MeshInstance3D.new()
+		var vm := BoxMesh.new(); vm.size = Vector3(0.12, 0.55, 0.04)
+		vine.mesh = vm; vine.material_override = vine_mat
+		var ang = (i / 5.0) * TAU
+		vine.position = Vector3(cos(ang) * 0.46, 0.35, sin(ang) * 0.46)
+		vine.rotation.y = ang
+		group.add_child(vine)
+
+	var col := CollisionShape3D.new()
+	var cyl := CylinderShape3D.new(); cyl.radius = 0.50; cyl.height = 0.70
+	col.shape = cyl; col.position.y = 0.35
+	group.add_child(col)
+
+	return group
+
+
+static func _build_mossy_rock() -> Node3D:
+	var group := StaticBody3D.new()
+	group.name = "Prop_MossyRock"
+	group.collision_layer = 1; group.collision_mask = 3
+
+	var stone_mat := StandardMaterial3D.new()
+	stone_mat.albedo_color = Color(0.38, 0.36, 0.34); stone_mat.roughness = 0.90
+
+	var moss_mat := StandardMaterial3D.new()
+	moss_mat.albedo_color = Color(0.22, 0.46, 0.18); moss_mat.roughness = 0.92
+
+	# Main rock
+	var rock := MeshInstance3D.new()
+	var sm := SphereMesh.new(); sm.radius = 0.75; sm.height = 1.1
+	rock.mesh = sm; rock.material_override = stone_mat; rock.position.y = 0.45
+	rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	group.add_child(rock)
+
+	# Moss layer on top
+	var moss := MeshInstance3D.new()
+	var mm := SphereMesh.new(); mm.radius = 0.65; mm.height = 0.50
+	moss.mesh = mm; moss.material_override = moss_mat; moss.position.y = 0.75
+	group.add_child(moss)
+
+	var col := CollisionShape3D.new()
+	var sp := SphereShape3D.new(); sp.radius = 0.75
+	col.shape = sp; col.position.y = 0.45
+	group.add_child(col)
+
+	return group
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ENVIRONMENTAL STORYTELLING PROPS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+static func _build_abandoned_cart() -> Node3D:
+	var group := StaticBody3D.new()
+	group.name = "Story_AbandonedCart"
+	group.collision_layer = 1; group.collision_mask = 3
+
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.albedo_color = Color(0.35, 0.22, 0.14); wood_mat.roughness = 0.90
+
+	var iron_mat := StandardMaterial3D.new()
+	iron_mat.albedo_color = Color(0.22, 0.22, 0.24); iron_mat.metallic = 0.80
+
+	# Cart bed
+	var bed := MeshInstance3D.new()
+	var bm := BoxMesh.new(); bm.size = Vector3(1.4, 0.35, 2.2)
+	bed.mesh = bm; bed.material_override = wood_mat; bed.position.y = 0.50
+	bed.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	group.add_child(bed)
+
+	# Cargo crates in cart
+	for i in range(2):
+		var crate := MeshInstance3D.new()
+		var cm := BoxMesh.new(); cm.size = Vector3(0.55, 0.55, 0.55)
+		crate.mesh = cm; crate.material_override = wood_mat
+		crate.position = Vector3((i - 0.5) * 0.6, 0.90, (i - 0.5) * 0.6)
+		group.add_child(crate)
+
+	# 2 Large wheels
+	for side in [-1, 1]:
+		var wheel := MeshInstance3D.new()
+		var wm := CylinderMesh.new(); wm.top_radius = 0.50; wm.bottom_radius = 0.50; wm.height = 0.08
+		wheel.mesh = wm; wheel.material_override = iron_mat
+		wheel.position = Vector3(side * 0.80, 0.50, 0.0)
+		wheel.rotation.z = deg_to_rad(90.0)
+		group.add_child(wheel)
+
+	var col := CollisionShape3D.new()
+	var box_col := BoxShape3D.new(); box_col.size = Vector3(1.8, 1.2, 2.4)
+	col.shape = box_col; col.position.y = 0.60
+	group.add_child(col)
+
+	return group
+
+
+static func _build_animal_skull() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Story_AnimalSkull"
+
+	var bone_mat := StandardMaterial3D.new()
+	bone_mat.albedo_color = Color(0.88, 0.84, 0.74); bone_mat.roughness = 0.60
+
+	# Skull base
+	var skull := MeshInstance3D.new()
+	var sm := BoxMesh.new(); sm.size = Vector3(0.35, 0.28, 0.55)
+	skull.mesh = sm; skull.material_override = bone_mat; skull.position.y = 0.14
+	group.add_child(skull)
+
+	# Antler horns
+	for side in [-1, 1]:
+		var horn := MeshInstance3D.new()
+		var hm := CylinderMesh.new(); hm.top_radius = 0.01; hm.bottom_radius = 0.04; hm.height = 0.75
+		horn.mesh = hm; horn.material_override = bone_mat
+		horn.position = Vector3(side * 0.22, 0.45, -0.15)
+		horn.rotation.z = side * deg_to_rad(35.0)
+		group.add_child(horn)
+
+	return group
+
+
+static func _build_torch_post() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Story_TorchPost"
+
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.albedo_color = Color(0.28, 0.18, 0.12); wood_mat.roughness = 0.90
+
+	var iron_mat := StandardMaterial3D.new()
+	iron_mat.albedo_color = Color(0.20, 0.20, 0.22); iron_mat.metallic = 0.85
+
+	var fire_mat := StandardMaterial3D.new()
+	fire_mat.albedo_color = Color(1.0, 0.55, 0.12)
+	fire_mat.emission_enabled = true; fire_mat.emission = Color(1.0, 0.50, 0.10); fire_mat.emission_energy_multiplier = 2.2
+
+	# Post
+	var post := MeshInstance3D.new()
+	var pm := CylinderMesh.new(); pm.top_radius = 0.06; pm.bottom_radius = 0.08; pm.height = 1.8
+	post.mesh = pm; post.material_override = wood_mat; post.position.y = 0.90
+	group.add_child(post)
+
+	# Iron bowl
+	var bowl := MeshInstance3D.new()
+	var bm := CylinderMesh.new(); bm.top_radius = 0.18; bm.bottom_radius = 0.10; bm.height = 0.18
+	bowl.mesh = bm; bowl.material_override = iron_mat; bowl.position.y = 1.85
+	group.add_child(bowl)
+
+	# Fire embers
+	var fire := MeshInstance3D.new()
+	var fm := SphereMesh.new(); fm.radius = 0.12; fm.height = 0.22
+	fire.mesh = fm; fire.material_override = fire_mat; fire.position.y = 1.98
+	group.add_child(fire)
+
+	# Soft warm point light
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.65, 0.25); light.light_energy = 2.2; light.omni_range = 7.0
+	light.position.y = 2.0
+	group.add_child(light)
+
+	return group
+
+
+static func _build_stone_circle() -> Node3D:
+	var group := StaticBody3D.new()
+	group.name = "Story_StoneCircle"
+	group.collision_layer = 1; group.collision_mask = 3
+
+	var stone_mat := StandardMaterial3D.new()
+	stone_mat.albedo_color = Color(0.35, 0.34, 0.32); stone_mat.roughness = 0.92
+
+	# 6 Standing megalith stones in a circle
+	for i in range(6):
+		var ang = (i / 6.0) * TAU
+		var stone := MeshInstance3D.new()
+		var sm := BoxMesh.new(); sm.size = Vector3(0.55, 1.8 + randf() * 0.4, 0.35)
+		stone.mesh = sm; stone.material_override = stone_mat
+		stone.position = Vector3(cos(ang) * 2.2, sm.size.y * 0.5, sin(ang) * 2.2)
+		stone.rotation.y = ang + deg_to_rad(randf_range(-15.0, 15.0))
+		stone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		group.add_child(stone)
+
+	var col := CollisionShape3D.new()
+	var sp := SphereShape3D.new(); sp.radius = 2.4
+	col.shape = sp; col.position.y = 0.9
+	group.add_child(col)
+
+	return group
+
+
+static func _build_broken_weapons() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Story_BrokenWeapons"
+
+	var metal_mat := StandardMaterial3D.new()
+	metal_mat.albedo_color = Color(0.60, 0.62, 0.65); metal_mat.metallic = 0.85
+
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.albedo_color = Color(0.35, 0.22, 0.14)
+
+	# Sword stuck in ground at angle
+	var sword := MeshInstance3D.new()
+	var sm := BoxMesh.new(); sm.size = Vector3(0.08, 0.90, 0.02)
+	sword.mesh = sm; sword.material_override = metal_mat
+	sword.position = Vector3(0.10, 0.30, 0)
+	sword.rotation = Vector3(deg_to_rad(25.0), deg_to_rad(15.0), deg_to_rad(-20.0))
+	group.add_child(sword)
+
+	# Broken wooden shield half
+	var shield := MeshInstance3D.new()
+	var shm := BoxMesh.new(); shm.size = Vector3(0.50, 0.04, 0.28)
+	shield.mesh = shm; shield.material_override = wood_mat
+	shield.position = Vector3(-0.25, 0.02, 0.15)
+	shield.rotation.y = deg_to_rad(40.0)
+	group.add_child(shield)
+
+	return group
+
+
+static func _build_hanging_lantern_post() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Story_LanternPost"
+
+	var iron_mat := StandardMaterial3D.new()
+	iron_mat.albedo_color = Color(0.18, 0.18, 0.20); iron_mat.metallic = 0.90
+
+	var glass_mat := StandardMaterial3D.new()
+	glass_mat.albedo_color = Color(1.0, 0.80, 0.30)
+	glass_mat.emission_enabled = true; glass_mat.emission = Color(1.0, 0.75, 0.20); glass_mat.emission_energy_multiplier = 2.0
+
+	# Iron pole
+	var pole := MeshInstance3D.new()
+	var pm := CylinderMesh.new(); pm.top_radius = 0.04; pm.bottom_radius = 0.06; pm.height = 2.4
+	pole.mesh = pm; pole.material_override = iron_mat; pole.position.y = 1.2
+	group.add_child(pole)
+
+	# Curved arm
+	var arm := MeshInstance3D.new()
+	var am := BoxMesh.new(); am.size = Vector3(0.60, 0.05, 0.05)
+	arm.mesh = am; arm.material_override = iron_mat; arm.position = Vector3(0.25, 2.35, 0)
+	group.add_child(arm)
+
+	# Hanging lantern
+	var lantern := MeshInstance3D.new()
+	var lm := BoxMesh.new(); lm.size = Vector3(0.18, 0.26, 0.18)
+	lantern.mesh = lm; lantern.material_override = glass_mat; lantern.position = Vector3(0.50, 2.10, 0)
+	group.add_child(lantern)
+
+	# Point light
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.80, 0.35); light.light_energy = 2.0; light.omni_range = 8.0
+	light.position = Vector3(0.50, 2.0, 0)
+	group.add_child(light)
+
+	return group
+
+
+static func _build_warning_sign() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Story_WarningSign"
+
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.albedo_color = Color(0.38, 0.25, 0.16); wood_mat.roughness = 0.92
+
+	var sign_mat := StandardMaterial3D.new()
+	sign_mat.albedo_color = Color(0.55, 0.18, 0.14)
+
+	# Post
+	var post := MeshInstance3D.new()
+	var pm := CylinderMesh.new(); pm.top_radius = 0.05; pm.bottom_radius = 0.06; pm.height = 1.4
+	post.mesh = pm; post.material_override = wood_mat; post.position.y = 0.70
+	group.add_child(post)
+
+	# Warning board
+	var board := MeshInstance3D.new()
+	var bm := BoxMesh.new(); bm.size = Vector3(0.70, 0.35, 0.04)
+	board.mesh = bm; board.material_override = sign_mat; board.position = Vector3(0, 1.2, 0)
+	group.add_child(board)
+
+	return group
+
+
+static func _build_bone_pile() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Story_BonePile"
+
+	var bone_mat := StandardMaterial3D.new()
+	bone_mat.albedo_color = Color(0.85, 0.82, 0.72); bone_mat.roughness = 0.65
+
+	for i in range(6):
+		var bone := MeshInstance3D.new()
+		var bm := CylinderMesh.new(); bm.top_radius = 0.03; bm.bottom_radius = 0.03; bm.height = 0.45
+		bone.mesh = bm; bone.material_override = bone_mat
+		var ang = (i / 6.0) * TAU
+		bone.position = Vector3(cos(ang) * 0.15, 0.04 + i * 0.02, sin(ang) * 0.15)
+		bone.rotation = Vector3(deg_to_rad(randf_range(70.0, 90.0)), randf() * TAU, 0)
+		group.add_child(bone)
+
+	return group
+
+
+static func _build_fallen_banner() -> Node3D:
+	var group := Node3D.new()
+	group.name = "Story_FallenBanner"
+
+	var pole_mat := StandardMaterial3D.new()
+	pole_mat.albedo_color = Color(0.30, 0.20, 0.12)
+
+	var cloth_mat := StandardMaterial3D.new()
+	cloth_mat.albedo_color = Color(0.65, 0.15, 0.18); cloth_mat.roughness = 0.80
+
+	# Broken pole
+	var pole := MeshInstance3D.new()
+	var pm := CylinderMesh.new(); pm.top_radius = 0.03; pm.bottom_radius = 0.03; pm.height = 1.5
+	pole.mesh = pm; pole.material_override = pole_mat
+	pole.position = Vector3(0, 0.15, 0)
+	pole.rotation = Vector3(deg_to_rad(75.0), deg_to_rad(20.0), 0)
+	group.add_child(pole)
+
+	# Draped torn banner cloth
+	var cloth := MeshInstance3D.new()
+	var cm := BoxMesh.new(); cm.size = Vector3(0.55, 0.02, 1.1)
+	cloth.mesh = cm; cloth.material_override = cloth_mat; cloth.position = Vector3(0.20, 0.03, 0.20)
+	cloth.rotation.y = deg_to_rad(15.0)
+	group.add_child(cloth)
+
+	return group
+
+
+static func _build_vine_archway() -> Node3D:
+	var group := StaticBody3D.new()
+	group.name = "Story_VineArchway"
+	group.collision_layer = 1; group.collision_mask = 3
+
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.albedo_color = Color(0.25, 0.16, 0.10); wood_mat.roughness = 0.95
+
+	var leaf_mat := StandardMaterial3D.new()
+	leaf_mat.albedo_color = Color(0.18, 0.44, 0.16); leaf_mat.roughness = 0.80
+
+	# 2 Curved trunk pillars
+	for side in [-1, 1]:
+		var trunk := MeshInstance3D.new()
+		var tm := CylinderMesh.new(); tm.top_radius = 0.20; tm.bottom_radius = 0.28; tm.height = 3.2
+		trunk.mesh = tm; trunk.material_override = wood_mat
+		trunk.position = Vector3(side * 1.5, 1.6, 0)
+		trunk.rotation.z = side * deg_to_rad(-15.0)
+		group.add_child(trunk)
+
+	# Overarching leaf canopy
+	var arch := MeshInstance3D.new()
+	var am := BoxMesh.new(); am.size = Vector3(3.4, 0.60, 0.80)
+	arch.mesh = am; arch.material_override = leaf_mat; arch.position = Vector3(0, 3.1, 0)
+	group.add_child(arch)
+
+	return group
+
