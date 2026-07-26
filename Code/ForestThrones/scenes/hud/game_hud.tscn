@@ -1,0 +1,122 @@
+[gd_scene load_steps=2 format=3 uid="uid://c6ft_game_hud"]
+
+[ext_resource type="Script" path="res://scenes/hud/game_hud.gd" id="1_hud"]
+
+[node name="GameHUD" type="CanvasLayer"]
+script = ExtResource("1_hud")
+
+[node name="HUDContainer" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="ReadoutLabel" type="Label" parent="HUDContainer"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -250.0
+offset_top = 20.0
+offset_right = 250.0
+offset_bottom = 50.0
+grow_horizontal = 2
+text = "Forest Thrones — Match In Progress"
+horizontal_alignment = 1
+
+[node name="ToastLabel" type="Label" parent="HUDContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 65.0
+offset_right = 300.0
+offset_bottom = 95.0
+grow_horizontal = 2
+text = "Notification"
+horizontal_alignment = 1
+
+[node name="ActionButton" type="Button" parent="HUDContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -100.0
+offset_top = -120.0
+offset_right = 100.0
+offset_bottom = -70.0
+grow_horizontal = 2
+grow_vertical = 0
+text = "ACTION"
+
+[node name="ActionFill" type="ColorRect" parent="HUDContainer/ActionButton"]
+layout_mode = 0
+offset_right = 0.0
+offset_bottom = 50.0
+mouse_filter = 2
+color = Color(0.83, 0.69, 0.22, 0.4)
+
+[node name="RansomBanner" type="PanelContainer" parent="HUDContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -280.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = 90.0
+grow_horizontal = 0
+
+[node name="AmountLabel" type="Label" parent="HUDContainer/RansomBanner"]
+layout_mode = 2
+text = "50 coins"
+
+[node name="TimerLabel" type="Label" parent="HUDContainer/RansomBanner"]
+layout_mode = 2
+text = "90s"
+horizontal_alignment = 2
+
+[node name="PrisonOptions" type="HBoxContainer" parent="HUDContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -250.0
+offset_top = -60.0
+offset_right = 250.0
+offset_bottom = -20.0
+grow_horizontal = 2
+grow_vertical = 0
+alignment = 1
+
+[node name="RansomBtn" type="Button" parent="HUDContainer/PrisonOptions"]
+layout_mode = 2
+text = "Ransom"
+
+[node name="LaborBtn" type="Button" parent="HUDContainer/PrisonOptions"]
+layout_mode = 2
+text = "Forced Labor"
+
+[node name="InterrogateBtn" type="Button" parent="HUDContainer/PrisonOptions"]
+layout_mode = 2
+text = "Interrogate"
+
+[node name="ExecuteBtn" type="Button" parent="HUDContainer/PrisonOptions"]
+layout_mode = 2
+text = "Execute"
+
+[node name="SellBtn" type="Button" parent="HUDContainer/PrisonOptions"]
+layout_mode = 2
+text = "Sell"

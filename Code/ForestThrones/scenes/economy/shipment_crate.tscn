@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://df7w8yvsnc1k7"]
+
+[ext_resource type="Script" path="res://scenes/economy/shipment_crate.gd" id="1_crate"]
+
+[node name="ShipmentCrate" type="Node3D"]
+script = ExtResource("1_crate")

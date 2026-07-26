@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3 uid="uid://df7w8yvsnc1k0"]
+
+[ext_resource type="Script" path="res://scenes/moments/cinematic_cut.gd" id="1_cinematic"]
+
+[node name="CinematicCut" type="CanvasLayer"]
+layer = 15
+script = ExtResource("1_cinematic")

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://df7w8yvsnc1k6"]
+
+[ext_resource type="Script" path="res://scenes/economy/black_market.gd" id="1_market"]
+
+[node name="BlackMarket" type="Node3D"]
+script = ExtResource("1_market")

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://df7w8yvsnc1k2"]
+
+[ext_resource type="Script" path="res://scenes/economy/coin_pickup.gd" id="1_coin"]
+
+[node name="CoinPickup" type="Node3D"]
+script = ExtResource("1_coin")

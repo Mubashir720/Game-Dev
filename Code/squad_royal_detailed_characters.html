@@ -1,0 +1,422 @@
+<div>
+<h2 class="sr-only">Upgraded 2.5D isometric squad prototype with four detailed characters: a King, Queen, Soldier 1, and Soldier 2, each with distinct crowns, capes, armor, and weapons, WASD movement and a shrinking safe zone</h2>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:13px; color:var(--text-secondary);">
+  <span>WASD or arrows to move the King · squad follows</span>
+  <span id="zoneReadout" style="font-weight:500; color:var(--text-primary);">Zone shrinks in 60s</span>
+</div>
+<div id="stage" style="width:100%; aspect-ratio:16/10; border-radius:12px; overflow:hidden; border:0.5px solid var(--border); position:relative; background:#1b2430;">
+  <div id="hud" style="position:absolute; top:10px; left:10px; z-index:2; font-size:12px; color:#eaeaea; background:rgba(0,0,0,0.35); padding:6px 10px; border-radius:8px;">Squad: King · Queen · Soldier 1 · Soldier 2</div>
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  var stage = document.getElementById('stage');
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1b2430);
+  scene.fog = new THREE.Fog(0x1b2430, 24, 58);
+
+  var w = stage.clientWidth, h = stage.clientHeight;
+  var aspect = w / h;
+  var d = 13;
+  var camera = new THREE.OrthographicCamera(-d*aspect, d*aspect, d, -d, 1, 200);
+
+  var renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(w, h);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  stage.appendChild(renderer.domElement);
+
+  var hemi = new THREE.HemisphereLight(0x9fb8d9, 0x33422f, 0.65);
+  scene.add(hemi);
+  var sun = new THREE.DirectionalLight(0xffe9c7, 1.15);
+  sun.position.set(18, 26, 12);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024,1024);
+  sun.shadow.camera.left = -30; sun.shadow.camera.right = 30;
+  sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -30;
+  scene.add(sun);
+  var fill = new THREE.DirectionalLight(0x6f8fd4, 0.35);
+  fill.position.set(-14, 10, -10);
+  scene.add(fill);
+
+  function makeGroundTexture(){
+    var size = 256;
+    var canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#3c5a42';
+    ctx.fillRect(0,0,size,size);
+    for(var i=0;i<1600;i++){
+      var x = Math.random()*size, y = Math.random()*size;
+      var shade = Math.floor(30 + Math.random()*45);
+      ctx.fillStyle = 'rgba(' + (50+shade) + ',' + (90+shade) + ',' + (60+shade) + ',0.55)';
+      ctx.fillRect(x,y,2,2);
+    }
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(9,9);
+    return tex;
+  }
+
+  var ground = new THREE.Mesh(
+    new THREE.CircleGeometry(28, 48),
+    new THREE.MeshStandardMaterial({map:makeGroundTexture(), roughness:1})
+  );
+  ground.rotation.x = -Math.PI/2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  var grid = new THREE.GridHelper(56, 28, 0x2c3d33, 0x2c3d33);
+  grid.material.opacity = 0.3;
+  grid.material.transparent = true;
+  scene.add(grid);
+
+  function prop(x,z,type){
+    var g = new THREE.Group();
+    if(type === 'tree'){
+      var trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.22,1.2,7), new THREE.MeshStandardMaterial({color:0x5b3f2b, roughness:0.9}));
+      trunk.position.y = 0.6; trunk.castShadow = true;
+      var leaves = new THREE.Mesh(new THREE.ConeGeometry(0.9,1.8,8), new THREE.MeshStandardMaterial({color:0x2f6b45, roughness:0.85}));
+      leaves.position.y = 1.9; leaves.castShadow = true;
+      g.add(trunk, leaves);
+    } else if(type === 'rock'){
+      var rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.55,0), new THREE.MeshStandardMaterial({color:0x6b6b63, roughness:0.95}));
+      rock.position.y = 0.35; rock.castShadow = true;
+      g.add(rock);
+    } else {
+      var crate = new THREE.Mesh(new THREE.BoxGeometry(1,0.9,1), new THREE.MeshStandardMaterial({color:0x8a6a3a, roughness:0.8}));
+      crate.position.y = 0.45; crate.castShadow = true;
+      g.add(crate);
+    }
+    g.position.set(x,0,z);
+    return g;
+  }
+  var propTypes = ['tree','rock','crate'];
+  for(var i=0;i<16;i++){
+    var ang = Math.random()*Math.PI*2;
+    var rad = 6 + Math.random()*18;
+    scene.add(prop(Math.cos(ang)*rad, Math.sin(ang)*rad, propTypes[i%3]));
+  }
+
+  function limbPivot(len, rad, mat, pivotY){
+    var pivot = new THREE.Group();
+    pivot.position.y = pivotY;
+    var mesh = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad*0.85, len, 10), mat);
+    mesh.position.y = -len/2;
+    mesh.castShadow = true;
+    pivot.add(mesh);
+    return pivot;
+  }
+
+  function contactShadow(){
+    var canvas = document.createElement('canvas');
+    canvas.width = 64; canvas.height = 64;
+    var ctx = canvas.getContext('2d');
+    var grad = ctx.createRadialGradient(32,32,0,32,32,32);
+    grad.addColorStop(0, 'rgba(0,0,0,0.4)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,64,64);
+    var tex = new THREE.CanvasTexture(canvas);
+    var mat = new THREE.MeshBasicMaterial({map:tex, transparent:true, depthWrite:false});
+    var mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15,1.15), mat);
+    mesh.rotation.x = -Math.PI/2;
+    mesh.position.y = 0.02;
+    return mesh;
+  }
+
+  function makeCrown(color, spiky){
+    var group = new THREE.Group();
+    var cmat = new THREE.MeshStandardMaterial({color:color, metalness:0.75, roughness:0.25});
+    var band = new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.32,0.13,16), cmat);
+    band.castShadow = true;
+    group.add(band);
+    if(spiky){
+      for(var i=0;i<6;i++){
+        var ang = (i/6)*Math.PI*2;
+        var spike = new THREE.Mesh(new THREE.ConeGeometry(0.055,0.2,6), cmat);
+        spike.position.set(Math.cos(ang)*0.28, 0.15, Math.sin(ang)*0.28);
+        group.add(spike);
+      }
+      var jewel = new THREE.Mesh(new THREE.OctahedronGeometry(0.07), new THREE.MeshStandardMaterial({color:0xcf3d6e, metalness:0.2, roughness:0.15}));
+      jewel.position.y = 0.09;
+      group.add(jewel);
+    } else {
+      for(var j=0;j<5;j++){
+        var a2 = (j/5)*Math.PI*2;
+        var pt = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,8), cmat);
+        pt.position.set(Math.cos(a2)*0.29, 0.11, Math.sin(a2)*0.29);
+        group.add(pt);
+      }
+      var gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), new THREE.MeshStandardMaterial({color:0x5da0d8, metalness:0.2, roughness:0.15}));
+      gem.position.y = 0.09;
+      group.add(gem);
+    }
+    return group;
+  }
+
+  function makeCape(color){
+    var geo = new THREE.PlaneGeometry(0.85, 1.25, 1, 5);
+    var pos = geo.attributes.position;
+    for(var i=0;i<pos.count;i++){
+      var y = pos.getY(i);
+      var bend = Math.pow((y+0.625)/1.25, 2) * 0.4;
+      pos.setZ(i, -bend);
+    }
+    geo.computeVertexNormals();
+    var mat = new THREE.MeshStandardMaterial({color:color, roughness:0.9, side:THREE.DoubleSide});
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(0, 1.55, -0.28);
+    mesh.castShadow = true;
+    return mesh;
+  }
+
+  function makeSkirt(color){
+    var mat = new THREE.MeshStandardMaterial({color:color, roughness:0.85});
+    var skirt = new THREE.Mesh(new THREE.ConeGeometry(0.58,0.95,12,1,true), mat);
+    skirt.position.y = 0.55;
+    skirt.castShadow = true;
+    return skirt;
+  }
+
+  function makeHelmet(){
+    var g = new THREE.Group();
+    var mat = new THREE.MeshStandardMaterial({color:0x3d4249, metalness:0.55, roughness:0.4});
+    var dome = new THREE.Mesh(new THREE.SphereGeometry(0.37,14,14,0,Math.PI*2,0,Math.PI/1.6), mat);
+    dome.position.y = 2.2; dome.castShadow = true;
+    var visor = new THREE.Mesh(new THREE.BoxGeometry(0.48,0.09,0.06), new THREE.MeshStandardMaterial({color:0x1a2a33, metalness:0.2, roughness:0.15}));
+    visor.position.set(0,2.1,0.31);
+    g.add(dome, visor);
+    return g;
+  }
+
+  function makeArmor(accent){
+    var g = new THREE.Group();
+    var mat = new THREE.MeshStandardMaterial({color:0x545a61, metalness:0.55, roughness:0.4});
+    var plate = new THREE.Mesh(new THREE.BoxGeometry(0.92,0.55,0.14), mat);
+    plate.position.set(0,1.55,0.19); plate.castShadow = true;
+    var stripe = new THREE.Mesh(new THREE.BoxGeometry(0.94,0.1,0.16), new THREE.MeshStandardMaterial({color:accent, roughness:0.6}));
+    stripe.position.set(0,1.35,0.2);
+    var pack = new THREE.Mesh(new THREE.BoxGeometry(0.55,0.6,0.22), mat);
+    pack.position.set(0,1.5,-0.32); pack.castShadow = true;
+    g.add(plate, stripe, pack);
+    return g;
+  }
+
+  function makePauldron(side, color){
+    var mat = new THREE.MeshStandardMaterial({color:color, metalness:0.5, roughness:0.4});
+    var p = new THREE.Mesh(new THREE.SphereGeometry(0.2,10,10), mat);
+    p.position.set(side*0.6, 1.82, 0); p.castShadow = true;
+    return p;
+  }
+
+  function makeRifle(){
+    var g = new THREE.Group();
+    var mat = new THREE.MeshStandardMaterial({color:0x2c2c2c, metalness:0.6, roughness:0.35});
+    var body = new THREE.Mesh(new THREE.BoxGeometry(0.14,0.14,0.75), mat);
+    var barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,0.4,8), mat);
+    barrel.rotation.x = Math.PI/2; barrel.position.z = -0.55;
+    var mag = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.28,0.1), mat);
+    mag.position.set(0,-0.18,0.1);
+    g.add(body, barrel, mag);
+    g.rotation.y = Math.PI/2;
+    g.position.set(0.05,-0.15,0.1);
+    return g;
+  }
+
+  function makeRapier(){
+    var g = new THREE.Group();
+    var blade = new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.02,0.65,6), new THREE.MeshStandardMaterial({color:0xd8dde3, metalness:0.85, roughness:0.15}));
+    blade.position.y = -0.4;
+    var guard = new THREE.Mesh(new THREE.TorusGeometry(0.07,0.015,6,12), new THREE.MeshStandardMaterial({color:0xc9a13a, metalness:0.8, roughness:0.25}));
+    guard.rotation.x = Math.PI/2; guard.position.y = -0.08;
+    g.add(blade, guard);
+    g.position.set(0.02,-0.1,0.05);
+    return g;
+  }
+
+  function makeScepter(){
+    var g = new THREE.Group();
+    var mat = new THREE.MeshStandardMaterial({color:0xc9a13a, metalness:0.8, roughness:0.25});
+    var shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.025,0.6,8), mat);
+    shaft.position.y = -0.35;
+    var top = new THREE.Mesh(new THREE.OctahedronGeometry(0.08), new THREE.MeshStandardMaterial({color:0x5da0d8, metalness:0.3, roughness:0.2}));
+    top.position.y = -0.02;
+    g.add(shaft, top);
+    g.position.set(0.02,-0.1,0.05);
+    return g;
+  }
+
+  function createCharacter(role, color){
+    var group = new THREE.Group();
+    var mat = new THREE.MeshStandardMaterial({color:color, roughness:0.75});
+    var dark = new THREE.MeshStandardMaterial({color:0x24262b, roughness:0.7});
+    var skinMat = new THREE.MeshStandardMaterial({color:0xdcae7e, roughness:0.6});
+
+    var torso = new THREE.Mesh(new THREE.BoxGeometry(0.85,1.0,0.5), mat);
+    torso.position.y = 1.35; torso.castShadow = true;
+    group.add(torso);
+
+    var head = new THREE.Mesh(new THREE.SphereGeometry(0.34,16,16), skinMat);
+    head.position.y = 2.15; head.castShadow = true;
+    group.add(head);
+
+    var leftArm = limbPivot(0.75, 0.14, mat, 1.78); leftArm.position.x = -0.55;
+    var rightArm = limbPivot(0.75, 0.14, mat, 1.78); rightArm.position.x = 0.55;
+    group.add(leftArm, rightArm);
+
+    var legMat = (role === 'queen') ? mat : dark;
+    var leftLeg = limbPivot(0.9, 0.17, legMat, 0.9); leftLeg.position.x = -0.22;
+    var rightLeg = limbPivot(0.9, 0.17, legMat, 0.9); rightLeg.position.x = 0.22;
+    group.add(leftLeg, rightLeg);
+
+    group.add(contactShadow());
+
+    if(role === 'king'){
+      group.add(makeCrown(0xd4af37, true));
+      head.children.length = 0;
+      var crown = group.children[group.children.length-2];
+      crown.position.y = 2.42;
+      group.add(makeCape(0x7a1f2b));
+      var belt = new THREE.Mesh(new THREE.TorusGeometry(0.46,0.03,8,16), new THREE.MeshStandardMaterial({color:0xc9a13a, metalness:0.8, roughness:0.25}));
+      belt.rotation.x = Math.PI/2; belt.position.y = 1.0;
+      group.add(belt);
+      rightArm.add(makeScepter());
+    } else if(role === 'queen'){
+      var crownQ = makeCrown(0xd4af37, false);
+      crownQ.position.y = 2.42;
+      group.add(crownQ);
+      group.add(makeSkirt(0x7a3d8f));
+      rightArm.add(makeRapier());
+    } else {
+      group.add(makeHelmet());
+      group.add(makePauldron(-1, color));
+      group.add(makePauldron(1, color));
+      group.add(makeArmor(role === 'soldier1' ? 0xb8860b : 0x4a7a9e));
+      rightArm.add(makeRifle());
+    }
+
+    group.userData = {leftArm:leftArm, rightArm:rightArm, leftLeg:leftLeg, rightLeg:rightLeg, walkT:0};
+    return group;
+  }
+
+  var king = createCharacter('king', 0x4b2e73);
+  king.position.set(0,0,4);
+  scene.add(king);
+  var player = king;
+
+  var squadDefs = [
+    {role:'queen', color:0x8a4fae, offset:0},
+    {role:'soldier1', color:0x5f7a4a, offset:2.4},
+    {role:'soldier2', color:0x6b6f76, offset:4.4}
+  ];
+  var mates = [];
+  squadDefs.forEach(function(def){
+    var mate = createCharacter(def.role, def.color);
+    mate.position.set(-2 + def.offset, 0, 6);
+    mate.userData.targetAngle = def.offset;
+    scene.add(mate);
+    mates.push(mate);
+  });
+
+  var zoneRadius = 27;
+  var zoneGeo = new THREE.RingGeometry(zoneRadius-0.15, zoneRadius, 64);
+  var zoneMat = new THREE.MeshBasicMaterial({color:0x5db0e0, side:THREE.DoubleSide, transparent:true, opacity:0.55});
+  var zone = new THREE.Mesh(zoneGeo, zoneMat);
+  zone.rotation.x = -Math.PI/2;
+  zone.position.y = 0.02;
+  scene.add(zone);
+
+  var camOffset = new THREE.Vector3(15, 15, 15);
+  function updateCamera(){
+    camera.position.copy(player.position).add(camOffset);
+    camera.lookAt(player.position.x, player.position.y+1, player.position.z);
+  }
+  updateCamera();
+
+  var keys = {};
+  window.addEventListener('keydown', function(e){ keys[e.key.toLowerCase()] = true; });
+  window.addEventListener('keyup', function(e){ keys[e.key.toLowerCase()] = false; });
+
+  function animateWalk(char, moving, dt){
+    var d2 = char.userData;
+    if(moving){
+      d2.walkT += dt*8;
+      var swing = Math.sin(d2.walkT)*0.5;
+      d2.leftLeg.rotation.x = swing;
+      d2.rightLeg.rotation.x = -swing;
+      d2.leftArm.rotation.x = -swing*0.7;
+      d2.rightArm.rotation.x = swing*0.4;
+    } else {
+      d2.leftLeg.rotation.x *= 0.8;
+      d2.rightLeg.rotation.x *= 0.8;
+      d2.leftArm.rotation.x *= 0.8;
+      d2.rightArm.rotation.x *= 0.8;
+    }
+  }
+
+  var elapsed = 0;
+  var shrinkAt = 60;
+  var clock = new THREE.Clock();
+
+  function tick(){
+    var dt = Math.min(clock.getDelta(), 0.05);
+    elapsed += dt;
+
+    var moveX = 0, moveZ = 0;
+    if(keys['w'] || keys['arrowup']) moveZ -= 1;
+    if(keys['s'] || keys['arrowdown']) moveZ += 1;
+    if(keys['a'] || keys['arrowleft']) moveX -= 1;
+    if(keys['d'] || keys['arrowright']) moveX += 1;
+    var moving = moveX !== 0 || moveZ !== 0;
+    if(moving){
+      var len = Math.sqrt(moveX*moveX + moveZ*moveZ);
+      moveX /= len; moveZ /= len;
+      player.position.x += moveX * dt * 6;
+      player.position.z += moveZ * dt * 6;
+      player.rotation.y = Math.atan2(moveX, moveZ);
+    }
+    animateWalk(player, moving, dt);
+
+    mates.forEach(function(mate){
+      var targetX = player.position.x + Math.cos(mate.userData.targetAngle + elapsed*0.15)*2.8;
+      var targetZ = player.position.z + Math.sin(mate.userData.targetAngle + elapsed*0.15)*2.8 + 1.6;
+      var dx = targetX - mate.position.x, dz = targetZ - mate.position.z;
+      var dist = Math.sqrt(dx*dx+dz*dz);
+      var mMoving = dist > 0.15;
+      if(mMoving){
+        mate.position.x += (dx/dist) * dt * 3.2;
+        mate.position.z += (dz/dist) * dt * 3.2;
+        mate.rotation.y = Math.atan2(dx, dz);
+      }
+      animateWalk(mate, mMoving, dt);
+    });
+
+    if(elapsed < shrinkAt){
+      var remaining = Math.max(0, Math.ceil(shrinkAt - elapsed));
+      document.getElementById('zoneReadout').textContent = 'Zone shrinks in ' + remaining + 's';
+    } else {
+      zoneRadius = Math.max(6, zoneRadius - dt*0.4);
+      zone.scale.set(zoneRadius/27, zoneRadius/27, 1);
+      document.getElementById('zoneReadout').textContent = 'Zone closing';
+    }
+
+    updateCamera();
+    renderer.render(scene, camera);
+    requestAnimationFrame(tick);
+  }
+  tick();
+
+  window.addEventListener('resize', function(){
+    var nw = stage.clientWidth, nh = stage.clientHeight;
+    var na = nw/nh;
+    camera.left = -d*na; camera.right = d*na;
+    camera.top = d; camera.bottom = -d;
+    camera.updateProjectionMatrix();
+    renderer.setSize(nw, nh);
+  });
+})();
+</script>

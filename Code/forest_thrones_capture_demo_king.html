@@ -1,0 +1,587 @@
+<div>
+<h2 class="sr-only">Interactive demo of Forest Thrones' core capture loop playing as the King: approach and attack an enemy Soldier, down them, handcuff and carry them to a cage, imprison them, then post a public ransom or choose another fate.</h2>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:13px; color:var(--text-secondary);">
+  <span>Playing as <strong style="color:var(--text-primary); font-weight:500;">King</strong> &middot; WASD to move</span>
+  <span id="stateReadout" style="font-weight:500; color:var(--text-primary);">Approach the enemy soldier</span>
+</div>
+
+<div id="stage" style="width:100%; aspect-ratio:16/10; border-radius:12px; overflow:hidden; border:0.5px solid var(--border); position:relative; background:#161d27;">
+
+  <div id="hpBar" style="position:absolute; display:none; transform:translate(-50%,-100%); width:74px; z-index:3; pointer-events:none;">
+    <div style="font-size:10px; color:#f2ede0; text-align:center; margin-bottom:2px; text-shadow:0 1px 2px rgba(0,0,0,0.8);">Soldier B</div>
+    <div style="height:6px; background:rgba(0,0,0,0.5); border-radius:3px; overflow:hidden;">
+      <div id="hpFill" style="height:100%; width:100%; background:#d84b4b;"></div>
+    </div>
+  </div>
+
+  <div style="position:absolute; bottom:12px; left:50%; transform:translateX(-50%); z-index:3;">
+    <button id="actionBtn" style="display:none; position:relative; padding:10px 22px; font-weight:500; overflow:hidden;">
+      <span id="actionBtnFill" style="position:absolute; left:0; top:0; bottom:0; width:0%; background:var(--bg-accent); z-index:0;"></span>
+      <span id="actionBtnLabel" style="position:relative; z-index:1;">Attack</span>
+    </button>
+  </div>
+
+  <div id="ransomComposer" style="display:none; position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:4; background:var(--surface-2); border:0.5px solid var(--border); border-radius:12px; padding:12px 16px; width:250px;">
+    <div style="font-size:13px; font-weight:500; margin-bottom:8px;">Set ransom</div>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <input type="range" min="20" max="80" step="5" value="50" id="ransomSlider" style="flex:1;">
+      <span id="ransomVal" style="font-size:13px; font-weight:500; min-width:52px;">50 coins</span>
+    </div>
+    <button id="postRansomBtn" style="width:100%;">Post to all 32 players</button>
+  </div>
+
+  <div id="ransomBanner" style="display:none; position:absolute; top:10px; left:10px; right:10px; z-index:4; background:rgba(24,18,12,0.88); border:0.5px solid #c9a13a; border-radius:8px; padding:8px 12px; color:#f2e3bd; font-size:12px; align-items:center; justify-content:space-between;">
+    <span><i class="ti ti-speakerphone" style="margin-right:6px;" aria-hidden="true"></i>Ransom posted &mdash; Soldier B &mdash; <span id="ransomAmountLabel">50</span> coins</span>
+    <span id="ransomTimer">90s</span>
+  </div>
+
+  <div id="prisonOptions" style="display:none; position:absolute; bottom:12px; left:50%; transform:translateX(-50%); z-index:4; gap:8px;">
+    <button id="optRansom"><i class="ti ti-coin" style="margin-right:4px;" aria-hidden="true"></i>Set ransom</button>
+    <button id="optLabor"><i class="ti ti-pick" style="margin-right:4px;" aria-hidden="true"></i>Forced labor</button>
+    <button id="optInterrogate"><i class="ti ti-eye" style="margin-right:4px;" aria-hidden="true"></i>Interrogate</button>
+    <button id="optExecute"><i class="ti ti-skull" style="margin-right:4px;" aria-hidden="true"></i>Execute</button>
+  </div>
+
+  <div id="toast" style="display:none; position:absolute; bottom:60px; left:50%; transform:translateX(-50%); z-index:4; background:rgba(24,18,12,0.88); color:#f2e3bd; padding:8px 14px; border-radius:8px; font-size:12px; max-width:80%; text-align:center;"></div>
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  var stage = document.getElementById('stage');
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x161d27);
+  scene.fog = new THREE.Fog(0x161d27, 20, 46);
+
+  var w = stage.clientWidth, h = stage.clientHeight;
+  var aspect = w/h;
+  var d = 10;
+  var camera = new THREE.OrthographicCamera(-d*aspect, d*aspect, d, -d, 1, 200);
+
+  var renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(w,h);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
+  renderer.domElement.style.display = 'block';
+  stage.insertBefore(renderer.domElement, stage.firstChild);
+
+  var hemi = new THREE.HemisphereLight(0x9fb8d9, 0x2c3a28, 0.6);
+  scene.add(hemi);
+  var sun = new THREE.DirectionalLight(0xffe1b0, 1.1);
+  sun.position.set(14,22,10);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024,1024);
+  sun.shadow.camera.left=-22; sun.shadow.camera.right=22;
+  sun.shadow.camera.top=22; sun.shadow.camera.bottom=-22;
+  scene.add(sun);
+  var fill = new THREE.DirectionalLight(0x5f78ad, 0.3);
+  fill.position.set(-10,8,-8);
+  scene.add(fill);
+
+  function makeGroundTexture(){
+    var size=256;
+    var canvas=document.createElement('canvas');
+    canvas.width=size; canvas.height=size;
+    var ctx=canvas.getContext('2d');
+    ctx.fillStyle='#33472f';
+    ctx.fillRect(0,0,size,size);
+    for(var i=0;i<1500;i++){
+      var x=Math.random()*size,y=Math.random()*size;
+      var s=Math.floor(30+Math.random()*40);
+      ctx.fillStyle='rgba('+(45+s)+','+(80+s)+','+(50+s*0.6)+',0.5)';
+      ctx.fillRect(x,y,2,2);
+    }
+    var tex=new THREE.CanvasTexture(canvas);
+    tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
+    tex.repeat.set(7,7);
+    return tex;
+  }
+  var ground = new THREE.Mesh(new THREE.CircleGeometry(20,48), new THREE.MeshStandardMaterial({map:makeGroundTexture(), roughness:1}));
+  ground.rotation.x=-Math.PI/2;
+  ground.receiveShadow=true;
+  scene.add(ground);
+
+  function prop(x,z,type){
+    var g=new THREE.Group();
+    if(type==='tree'){
+      var trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.2,1.1,7), new THREE.MeshStandardMaterial({color:0x5b3f2b, roughness:0.9}));
+      trunk.position.y=0.55; trunk.castShadow=true;
+      var leaves=new THREE.Mesh(new THREE.ConeGeometry(0.8,1.6,8), new THREE.MeshStandardMaterial({color:0x2a5c3c, roughness:0.85}));
+      leaves.position.y=1.7; leaves.castShadow=true;
+      g.add(trunk,leaves);
+    } else {
+      var rock=new THREE.Mesh(new THREE.DodecahedronGeometry(0.45,0), new THREE.MeshStandardMaterial({color:0x63635b, roughness:0.95}));
+      rock.position.y=0.3; rock.castShadow=true;
+      g.add(rock);
+    }
+    g.position.set(x,0,z);
+    return g;
+  }
+  for(var i=0;i<10;i++){
+    var ang=Math.random()*Math.PI*2, rad=8+Math.random()*9;
+    scene.add(prop(Math.cos(ang)*rad, Math.sin(ang)*rad, i%2===0?'tree':'rock'));
+  }
+
+  function limbPivot(len,rad,mat,pivotY){
+    var pivot=new THREE.Group();
+    pivot.position.y=pivotY;
+    var mesh=new THREE.Mesh(new THREE.CylinderGeometry(rad,rad*0.85,len,10), mat);
+    mesh.position.y=-len/2;
+    mesh.castShadow=true;
+    pivot.add(mesh);
+    return pivot;
+  }
+
+  function contactShadow(){
+    var canvas=document.createElement('canvas');
+    canvas.width=64; canvas.height=64;
+    var ctx=canvas.getContext('2d');
+    var grad=ctx.createRadialGradient(32,32,0,32,32,32);
+    grad.addColorStop(0,'rgba(0,0,0,0.4)');
+    grad.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=grad;
+    ctx.fillRect(0,0,64,64);
+    var tex=new THREE.CanvasTexture(canvas);
+    var mat=new THREE.MeshBasicMaterial({map:tex, transparent:true, depthWrite:false});
+    var mesh=new THREE.Mesh(new THREE.PlaneGeometry(1.1,1.1), mat);
+    mesh.rotation.x=-Math.PI/2;
+    mesh.position.y=0.02;
+    return mesh;
+  }
+
+  function makeCrown(){
+    var group=new THREE.Group();
+    var cmat=new THREE.MeshStandardMaterial({color:0xd4af37, metalness:0.75, roughness:0.25});
+    var band=new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.32,0.13,16), cmat);
+    band.castShadow=true;
+    group.add(band);
+    for(var i=0;i<6;i++){
+      var ang=(i/6)*Math.PI*2;
+      var spike=new THREE.Mesh(new THREE.ConeGeometry(0.055,0.2,6), cmat);
+      spike.position.set(Math.cos(ang)*0.28,0.15,Math.sin(ang)*0.28);
+      group.add(spike);
+    }
+    var jewel=new THREE.Mesh(new THREE.OctahedronGeometry(0.07), new THREE.MeshStandardMaterial({color:0xcf3d6e, metalness:0.2, roughness:0.15}));
+    jewel.position.y=0.09;
+    group.add(jewel);
+    group.position.y=2.42;
+    return group;
+  }
+
+  function makeCape(color){
+    var geo=new THREE.PlaneGeometry(0.85,1.25,1,5);
+    var pos=geo.attributes.position;
+    for(var i=0;i<pos.count;i++){
+      var y=pos.getY(i);
+      var bend=Math.pow((y+0.625)/1.25,2)*0.4;
+      pos.setZ(i,-bend);
+    }
+    geo.computeVertexNormals();
+    var mat=new THREE.MeshStandardMaterial({color:color, roughness:0.9, side:THREE.DoubleSide});
+    var mesh=new THREE.Mesh(geo,mat);
+    mesh.position.set(0,1.55,-0.28);
+    mesh.castShadow=true;
+    return mesh;
+  }
+
+  function makeHelmet(){
+    var g=new THREE.Group();
+    var mat=new THREE.MeshStandardMaterial({color:0x3d4249, metalness:0.55, roughness:0.4});
+    var dome=new THREE.Mesh(new THREE.SphereGeometry(0.37,14,14,0,Math.PI*2,0,Math.PI/1.6), mat);
+    dome.position.y=2.2; dome.castShadow=true;
+    var visor=new THREE.Mesh(new THREE.BoxGeometry(0.48,0.09,0.06), new THREE.MeshStandardMaterial({color:0x1a2a33, metalness:0.2, roughness:0.15}));
+    visor.position.set(0,2.1,0.31);
+    g.add(dome,visor);
+    return g;
+  }
+
+  function makeArmor(accent){
+    var g=new THREE.Group();
+    var mat=new THREE.MeshStandardMaterial({color:0x545a61, metalness:0.55, roughness:0.4});
+    var plate=new THREE.Mesh(new THREE.BoxGeometry(0.92,0.55,0.14), mat);
+    plate.position.set(0,1.55,0.19); plate.castShadow=true;
+    var stripe=new THREE.Mesh(new THREE.BoxGeometry(0.94,0.1,0.16), new THREE.MeshStandardMaterial({color:accent, roughness:0.6}));
+    stripe.position.set(0,1.35,0.2);
+    g.add(plate,stripe);
+    return g;
+  }
+
+  function makePauldron(side, color){
+    var mat=new THREE.MeshStandardMaterial({color:color, metalness:0.5, roughness:0.4});
+    var p=new THREE.Mesh(new THREE.SphereGeometry(0.2,10,10), mat);
+    p.position.set(side*0.6,1.82,0); p.castShadow=true;
+    return p;
+  }
+
+  function makeSword(){
+    var g=new THREE.Group();
+    var blade=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.7,0.02), new THREE.MeshStandardMaterial({color:0xd8dde3, metalness:0.85, roughness:0.15}));
+    blade.position.y=-0.42;
+    var guard=new THREE.Mesh(new THREE.BoxGeometry(0.24,0.05,0.05), new THREE.MeshStandardMaterial({color:0xc9a13a, metalness:0.8, roughness:0.25}));
+    guard.position.y=-0.06;
+    var hilt=new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.025,0.16,8), new THREE.MeshStandardMaterial({color:0x3b2a1d, roughness:0.8}));
+    hilt.position.y=0.02;
+    g.add(blade,guard,hilt);
+    g.position.set(0.02,-0.1,0.05);
+    return g;
+  }
+
+  function createCharacter(role, color){
+    var group=new THREE.Group();
+    var mat=new THREE.MeshStandardMaterial({color:color, roughness:0.75});
+    var dark=new THREE.MeshStandardMaterial({color:0x24262b, roughness:0.7});
+    var skinMat=new THREE.MeshStandardMaterial({color:0xdcae7e, roughness:0.6});
+
+    var torso=new THREE.Mesh(new THREE.BoxGeometry(0.85,1.0,0.5), mat);
+    torso.position.y=1.35; torso.castShadow=true;
+    group.add(torso);
+
+    var head=new THREE.Mesh(new THREE.SphereGeometry(0.34,16,16), skinMat);
+    head.position.y=2.15; head.castShadow=true;
+    group.add(head);
+
+    var leftArm=limbPivot(0.75,0.14,mat,1.78); leftArm.position.x=-0.55;
+    var rightArm=limbPivot(0.75,0.14,mat,1.78); rightArm.position.x=0.55;
+    group.add(leftArm,rightArm);
+
+    var leftLeg=limbPivot(0.9,0.17,dark,0.9); leftLeg.position.x=-0.22;
+    var rightLeg=limbPivot(0.9,0.17,dark,0.9); rightLeg.position.x=0.22;
+    group.add(leftLeg,rightLeg);
+
+    group.add(contactShadow());
+    rightArm.add(makeSword());
+
+    if(role==='king'){
+      group.add(makeCrown());
+      group.add(makeCape(0x7a1f2b));
+      var belt=new THREE.Mesh(new THREE.TorusGeometry(0.46,0.03,8,16), new THREE.MeshStandardMaterial({color:0xc9a13a, metalness:0.8, roughness:0.25}));
+      belt.rotation.x=Math.PI/2; belt.position.y=1.0;
+      group.add(belt);
+    } else {
+      group.add(makeHelmet());
+      group.add(makePauldron(-1,color));
+      group.add(makePauldron(1,color));
+      group.add(makeArmor(0x8a2a20));
+    }
+
+    group.userData={leftArm:leftArm, rightArm:rightArm, leftLeg:leftLeg, rightLeg:rightLeg, walkT:0, attacking:false, attackT:0, torso:torso, mat:mat};
+    return group;
+  }
+
+  function makeCage(){
+    var g=new THREE.Group();
+    var woodMat=new THREE.MeshStandardMaterial({color:0x5b3f2b, roughness:0.9});
+    var ironMat=new THREE.MeshStandardMaterial({color:0x2b2d31, metalness:0.6, roughness:0.4});
+    var base=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.15,2.2), woodMat);
+    base.position.y=0.08; base.receiveShadow=true;
+    g.add(base);
+    var roof=new THREE.Mesh(new THREE.BoxGeometry(2.3,0.12,2.3), woodMat);
+    roof.position.y=2.2; roof.castShadow=true;
+    g.add(roof);
+    var corners=[[-1,-1],[1,-1],[1,1],[-1,1]];
+    corners.forEach(function(c){
+      var post=new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,2.2,8), ironMat);
+      post.position.set(c[0]*1.0,1.15,c[1]*1.0);
+      post.castShadow=true;
+      g.add(post);
+    });
+    for(var i=0;i<7;i++){
+      var t=-1+(i/6)*2;
+      var bar1=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,2.15,6), ironMat);
+      bar1.position.set(t*1.0,1.15,-1.0);
+      g.add(bar1);
+      var bar2=bar1.clone();
+      bar2.position.z=1.0;
+      g.add(bar2);
+    }
+    return g;
+  }
+
+  var king = createCharacter('king', 0x4b2e73);
+  king.position.set(-5,0,3);
+  scene.add(king);
+
+  var enemy = createCharacter('soldier', 0xb3462f);
+  enemy.position.set(4,0,-2);
+  scene.add(enemy);
+
+  var cage = makeCage();
+  cage.position.set(5,0,3);
+  scene.add(cage);
+
+  var prisonerMesh=null;
+
+  function animateWalk(char, moving, dt){
+    var d2=char.userData;
+    if(moving){
+      d2.walkT+=dt*8;
+      var swing=Math.sin(d2.walkT)*0.5;
+      d2.leftLeg.rotation.x=swing;
+      d2.rightLeg.rotation.x=-swing;
+      d2.leftArm.rotation.x=-swing*0.7;
+      if(!d2.attacking) d2.rightArm.rotation.x=swing*0.4;
+    } else {
+      d2.leftLeg.rotation.x*=0.8;
+      d2.rightLeg.rotation.x*=0.8;
+      d2.leftArm.rotation.x*=0.8;
+      if(!d2.attacking) d2.rightArm.rotation.x*=0.8;
+    }
+  }
+
+  function flashHit(charGroup){
+    var mat=charGroup.userData.mat;
+    mat.emissive=new THREE.Color(0xffffff);
+    mat.emissiveIntensity=0.8;
+    setTimeout(function(){
+      mat.emissive=new THREE.Color(0x000000);
+      mat.emissiveIntensity=0;
+    },120);
+  }
+
+  var camOffset=new THREE.Vector3(12,13,12);
+  function updateCamera(){
+    camera.position.copy(king.position).add(camOffset);
+    camera.lookAt(king.position.x, king.position.y+1, king.position.z);
+  }
+  updateCamera();
+
+  function worldToScreen(vec3){
+    var v=vec3.clone();
+    v.project(camera);
+    var widthHalf=stage.clientWidth/2, heightHalf=stage.clientHeight/2;
+    return {x:(v.x*widthHalf)+widthHalf, y:-(v.y*heightHalf)+heightHalf};
+  }
+
+  var phase='approach';
+  var enemyHP=100;
+  var holding=false;
+  var cuffProgress=0;
+  var currentMode=null;
+  var ransomInterval=null;
+
+  var actionBtn=document.getElementById('actionBtn');
+  var actionBtnFill=document.getElementById('actionBtnFill');
+  var actionBtnLabel=document.getElementById('actionBtnLabel');
+  var stateReadout=document.getElementById('stateReadout');
+  var hpBarEl=document.getElementById('hpBar');
+  var toastEl=document.getElementById('toast');
+  var toastTimer=null;
+
+  function setState(text){ stateReadout.textContent=text; }
+  function setActionMode(mode,label){
+    currentMode=mode;
+    actionBtnLabel.textContent=label;
+    actionBtnFill.style.width='0%';
+  }
+  function updateHPBar(){
+    document.getElementById('hpFill').style.width=enemyHP+'%';
+  }
+  function showToast(text){
+    toastEl.textContent=text;
+    toastEl.style.display='block';
+    if(toastTimer) clearTimeout(toastTimer);
+    toastTimer=setTimeout(function(){ toastEl.style.display='none'; },4200);
+  }
+
+  function doAttack(){
+    if(phase!=='inRange'||king.userData.attacking) return;
+    king.userData.attacking=true;
+    king.userData.attackT=0;
+    setTimeout(function(){
+      enemyHP=Math.max(0,enemyHP-25);
+      updateHPBar();
+      flashHit(enemy);
+      if(enemyHP<=0){ downEnemy(); }
+    },150);
+  }
+
+  function downEnemy(){
+    phase='downed';
+    hpBarEl.style.display='none';
+    enemy.rotation.x=Math.PI/2*0.82;
+    setActionMode('hold','Hold to handcuff (2s)');
+    setState('Enemy downed \u2014 hold to handcuff');
+  }
+
+  function completeCuff(){
+    holding=false;
+    phase='carrying';
+    scene.remove(enemy);
+    enemy.rotation.set(0, enemy.rotation.y, 0);
+    enemy.scale.set(0.6,0.6,0.6);
+    enemy.position.set(0.3,1.5,-0.35);
+    king.add(enemy);
+    actionBtn.style.display='none';
+    setState('Carrying prisoner \u2014 walk to the cage');
+  }
+
+  function doImprison(){
+    phase='imprisoned';
+    king.remove(enemy);
+    var sil=new THREE.Mesh(new THREE.BoxGeometry(0.5,1.1,0.35), new THREE.MeshStandardMaterial({color:0xb3462f, roughness:0.8}));
+    sil.position.set(cage.position.x, 0.65, cage.position.z);
+    sil.castShadow=true;
+    scene.add(sil);
+    prisonerMesh=sil;
+    actionBtn.style.display='none';
+    document.getElementById('prisonOptions').style.display='flex';
+    setState('Prisoner locked in the cage \u2014 choose their fate');
+  }
+
+  function triggerCurse(){
+    var auraGeo=new THREE.RingGeometry(0.9,1.3,32);
+    var auraMat=new THREE.MeshBasicMaterial({color:0xaa2222, transparent:true, opacity:0.6, side:THREE.DoubleSide});
+    var aura=new THREE.Mesh(auraGeo,auraMat);
+    aura.rotation.x=-Math.PI/2;
+    aura.position.y=0.03;
+    king.add(aura);
+    var t0=performance.now();
+    (function pulse(){
+      var el=performance.now()-t0;
+      var s=1+0.15*Math.sin(el/200);
+      aura.scale.set(s,s,1);
+      if(el<6000){ requestAnimationFrame(pulse); } else { king.remove(aura); }
+    })();
+  }
+
+  actionBtn.addEventListener('pointerdown', function(e){
+    e.preventDefault();
+    if(currentMode==='attack') doAttack();
+    else if(currentMode==='hold'){ holding=true; cuffProgress=0; }
+    else if(currentMode==='imprison') doImprison();
+  });
+  actionBtn.addEventListener('pointerup', function(){
+    if(currentMode==='hold'){ holding=false; cuffProgress=0; actionBtnFill.style.width='0%'; }
+  });
+  actionBtn.addEventListener('pointerleave', function(){
+    if(currentMode==='hold'){ holding=false; cuffProgress=0; actionBtnFill.style.width='0%'; }
+  });
+
+  var ransomSlider=document.getElementById('ransomSlider');
+  ransomSlider.addEventListener('input', function(){
+    document.getElementById('ransomVal').textContent=ransomSlider.value+' coins';
+  });
+  document.getElementById('optRansom').addEventListener('click', function(){
+    document.getElementById('prisonOptions').style.display='none';
+    document.getElementById('ransomComposer').style.display='block';
+    setState('Setting a ransom');
+  });
+  document.getElementById('postRansomBtn').addEventListener('click', function(){
+    var amt=ransomSlider.value;
+    document.getElementById('ransomComposer').style.display='none';
+    document.getElementById('ransomAmountLabel').textContent=amt;
+    var banner=document.getElementById('ransomBanner');
+    banner.style.display='flex';
+    var t=90;
+    document.getElementById('ransomTimer').textContent=t+'s';
+    if(ransomInterval) clearInterval(ransomInterval);
+    ransomInterval=setInterval(function(){
+      t--;
+      document.getElementById('ransomTimer').textContent=Math.max(0,t)+'s';
+      if(t<=0){
+        clearInterval(ransomInterval);
+        banner.style.display='none';
+        showToast('Ransom window expired.');
+      }
+    },1000);
+    setState('Ransom broadcasting to all 32 players');
+  });
+  document.getElementById('optLabor').addEventListener('click', function(){
+    document.getElementById('prisonOptions').style.display='none';
+    showToast('Forced labor started \u2014 prisoner auto-collects resources at 25% rate for up to 3 minutes.');
+    setState('Prisoner on forced labor');
+  });
+  document.getElementById('optInterrogate').addEventListener('click', function(){
+    document.getElementById('prisonOptions').style.display='none';
+    showToast('Interrogation successful \u2014 enemy squad coin total revealed.');
+    setState('Prisoner interrogated');
+  });
+  document.getElementById('optExecute').addEventListener('click', function(){
+    document.getElementById('prisonOptions').style.display='none';
+    if(prisonerMesh){ scene.remove(prisonerMesh); prisonerMesh=null; }
+    showToast('Prisoner executed \u2014 Forest Curse triggered on your squad.');
+    triggerCurse();
+    setState('Forest Curse active \u2014 beasts are hunting you');
+  });
+
+  var keys={};
+  window.addEventListener('keydown', function(e){ keys[e.key.toLowerCase()]=true; });
+  window.addEventListener('keyup', function(e){ keys[e.key.toLowerCase()]=false; });
+
+  var clock=new THREE.Clock();
+  function tick(){
+    var dt=Math.min(clock.getDelta(),0.05);
+
+    var moveX=0, moveZ=0;
+    if(keys['w']||keys['arrowup']) moveZ-=1;
+    if(keys['s']||keys['arrowdown']) moveZ+=1;
+    if(keys['a']||keys['arrowleft']) moveX-=1;
+    if(keys['d']||keys['arrowright']) moveX+=1;
+    var moving=moveX!==0||moveZ!==0;
+    var speed=(phase==='carrying'||phase==='atCage')?3.6:6;
+    if(moving){
+      var len=Math.sqrt(moveX*moveX+moveZ*moveZ);
+      moveX/=len; moveZ/=len;
+      king.position.x+=moveX*dt*speed;
+      king.position.z+=moveZ*dt*speed;
+      king.rotation.y=Math.atan2(moveX,moveZ);
+    }
+    animateWalk(king, moving, dt);
+    if(king.userData.attacking){
+      king.userData.attackT+=dt;
+      var t=king.userData.attackT, dur=0.35;
+      if(t<dur){ king.userData.rightArm.rotation.x=-Math.sin((t/dur)*Math.PI)*1.6; }
+      else { king.userData.attacking=false; king.userData.rightArm.rotation.x=0; }
+    }
+
+    if(phase==='approach'||phase==='inRange'){
+      var dx=king.position.x-enemy.position.x, dz=king.position.z-enemy.position.z;
+      var dist=Math.sqrt(dx*dx+dz*dz);
+      if(dist<2.6){
+        if(phase!=='inRange'){ phase='inRange'; setActionMode('attack','Attack'); actionBtn.style.display=''; setState('In range \u2014 press Attack'); }
+      } else {
+        if(phase!=='approach'){ phase='approach'; actionBtn.style.display='none'; setState('Approach the enemy soldier'); }
+      }
+      hpBarEl.style.display='block';
+      var sp=worldToScreen(new THREE.Vector3(enemy.position.x,2.4,enemy.position.z));
+      hpBarEl.style.left=sp.x+'px';
+      hpBarEl.style.top=sp.y+'px';
+    }
+
+    if(holding && phase==='downed'){
+      cuffProgress+=dt;
+      actionBtnFill.style.width=Math.min(100,(cuffProgress/2)*100)+'%';
+      if(cuffProgress>=2){ completeCuff(); }
+    }
+
+    if(phase==='carrying'||phase==='atCage'){
+      var dx2=king.position.x-cage.position.x, dz2=king.position.z-cage.position.z;
+      var dist2=Math.sqrt(dx2*dx2+dz2*dz2);
+      if(dist2<2.8){
+        if(phase!=='atCage'){ phase='atCage'; setActionMode('imprison','Imprison'); actionBtn.style.display=''; setState('At the cage \u2014 press Imprison'); }
+      } else {
+        if(phase==='atCage'){ phase='carrying'; actionBtn.style.display='none'; setState('Carrying prisoner \u2014 walk to the cage'); }
+      }
+    }
+
+    updateCamera();
+    renderer.render(scene,camera);
+    requestAnimationFrame(tick);
+  }
+  tick();
+
+  window.addEventListener('resize', function(){
+    var nw=stage.clientWidth, nh=stage.clientHeight;
+    var na=nw/nh;
+    camera.left=-d*na; camera.right=d*na;
+    camera.top=d; camera.bottom=-d;
+    camera.updateProjectionMatrix();
+    renderer.setSize(nw,nh);
+  });
+})();
+</script>

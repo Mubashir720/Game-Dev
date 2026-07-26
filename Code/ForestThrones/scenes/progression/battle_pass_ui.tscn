@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://c6ft_6f8c36d9"]
+
+[ext_resource type="Script" path="res://scenes/progression/battle_pass_ui.gd" id="1_pass"]
+
+[node name="BattlePassUI" type="CanvasLayer"]
+script = ExtResource("1_pass")

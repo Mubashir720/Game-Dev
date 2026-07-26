@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://c6ft_7eb1f8fd"]
+
+[ext_resource type="Script" path="res://scenes/hud/post_match_summary.gd" id="1_post"]
+
+[node name="PostMatchSummary" type="CanvasLayer"]
+script = ExtResource("1_post")

@@ -1,0 +1,122 @@
+[gd_scene load_steps=2 format=3 uid="uid://c6ft_archetype_select"]
+
+[ext_resource type="Script" path="res://scenes/menus/archetype_select.gd" id="1_arch"]
+
+[node name="ArchetypeSelect" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_arch")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.06, 0.08, 0.12, 1)
+
+[node name="PreviewContainer" type="SubViewportContainer" parent="."]
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -550.0
+grow_horizontal = 0
+grow_vertical = 2
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="PreviewContainer"]
+handle_input_locally = false
+size = Vector2i(550, 720)
+render_target_update_mode = 4
+
+[node name="GridMargin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_right = 380.0
+grow_vertical = 2
+theme_override_constants/margin_left = 30
+theme_override_constants/margin_top = 30
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 30
+
+[node name="VBox" type="VBoxContainer" parent="GridMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="GridMargin/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "SELECT YOUR ARCHETYPE"
+
+[node name="Subtitle" type="Label" parent="GridMargin/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.83, 0.69, 0.22, 1)
+text = "Choose from 12 Legendary Roles"
+
+[node name="Scroll" type="ScrollContainer" parent="GridMargin/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ArchetypeGrid" type="VBoxContainer" parent="GridMargin/VBox/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="InfoPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 13
+anchor_left = 0.5
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -250.0
+offset_top = 30.0
+offset_right = 80.0
+offset_bottom = -30.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="InfoPanel"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="NameLabel" type="Label" parent="InfoPanel/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 26
+text = "WARLORD"
+
+[node name="RoleLabel" type="Label" parent="InfoPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.83, 0.69, 0.22, 1)
+text = "Role: King (Combat Anchor)"
+
+[node name="HSeparator" type="HSeparator" parent="InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="ActiveLabel" type="Label" parent="InfoPanel/VBox"]
+layout_mode = 2
+text = "Active: Rally Cry"
+autowrap_mode = 2
+
+[node name="PassiveLabel" type="Label" parent="InfoPanel/VBox"]
+layout_mode = 2
+text = "Passive: War Banner"
+autowrap_mode = 2
+
+[node name="SelectPlayBtn" type="Button" parent="InfoPanel/VBox"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+size_flags_vertical = 10
+text = "PLAY WITH THIS ARCHETYPE"
+
+[node name="BackButton" type="Button" parent="InfoPanel/VBox"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+text = "BACK TO MENU"

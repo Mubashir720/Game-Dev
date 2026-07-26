@@ -1,0 +1,24 @@
+[gd_resource type="Environment" format=3 uid="uid://c6ft_env_tres"]
+
+[resource]
+background_mode = 1
+background_color = Color(0.086, 0.114, 0.153, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.623529, 0.721569, 0.85098, 1)
+ambient_light_energy = 0.75
+reflected_light_source = 1
+tonemap_mode = 2
+tonemap_exposure = 1.10
+tonemap_white = 1.30
+ssao_enabled = true
+ssao_radius = 2.2
+ssao_intensity = 1.6
+ssao_power = 1.5
+glow_enabled = true
+glow_intensity = 0.90
+glow_bloom = 0.18
+glow_blend_mode = 0
+fog_enabled = true
+fog_light_color = Color(0.086, 0.114, 0.153, 1)
+fog_density = 0.006
+fog_sky_affect = 0.5

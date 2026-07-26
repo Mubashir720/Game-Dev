@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3 uid="uid://c6ft_3ea31ec2"]
+
+[ext_resource type="Script" path="res://scenes/moments/highlights_reel.gd" id="1_reel"]
+
+[node name="HighlightsReel" type="CanvasLayer"]
+layer = 12
+script = ExtResource("1_reel")
