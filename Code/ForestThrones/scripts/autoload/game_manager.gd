@@ -5,11 +5,21 @@ var game_state: Constants.GameState = Constants.GameState.LOADING
 var current_day_time := 0.33 # Start in morning (0.0 = midnight, 0.5 = midday)
 var squads: Array = []
 var selected_archetype_id: String = "warlord"
+## Practice Island (GDD §14) — solo, no enemies, tutorial integrated.
+var practice_mode: bool = false
+## Last completed match's summary, read by the post-match screen.
+var last_match_report: Dictionary = {}
 
 var _last_emitted_tick := -1
+var _current_phase: int = -1
 
 func _ready() -> void:
-	call_deferred("start_match")
+	# BUG FIXED: this used to call start_match() on autoload _ready, which meant
+	# the 25-minute match clock began ticking the moment the app launched — while
+	# the player was still on the main menu. By the time they actually pressed
+	# Play, the Traitor unlock and zone shrink could already have passed.
+	# The match now starts when MatchRoot says it does.
+	game_state = Constants.GameState.LOBBY
 
 func start_match() -> void:
 	game_state = Constants.GameState.PLAYING
@@ -33,8 +43,11 @@ func _process(delta: float) -> void:
 	var cycle_speed = 1.0 / Constants.FULL_DAY_NIGHT_CYCLE
 	current_day_time = fmod(current_day_time + delta * cycle_speed, 1.0)
 	
-	# Determine Day Phase
-	var phase = Constants.DayPhase.DAY
+	# Determine Day Phase.
+	# BUG FIXED: this used to emit day_phase_changed EVERY frame, which meant
+	# every listener re-ran its transition work 60 times a second and the log
+	# filled with one line per frame. It now only fires on an actual change.
+	var phase := Constants.DayPhase.DAY
 	if current_day_time < 0.10:
 		phase = Constants.DayPhase.DAWN
 	elif current_day_time < 0.60:
@@ -43,8 +56,10 @@ func _process(delta: float) -> void:
 		phase = Constants.DayPhase.DUSK
 	else:
 		phase = Constants.DayPhase.NIGHT
-		
-	EventBus.day_phase_changed.emit(phase)
+
+	if phase != _current_phase:
+		_current_phase = phase
+		EventBus.day_phase_changed.emit(phase)
 
 func _check_timeline_events(tick: int) -> void:
 	# GDD §12 Match Timeline Triggers (in seconds)

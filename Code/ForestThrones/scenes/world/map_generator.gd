@@ -1,35 +1,55 @@
 extends RefCounted
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  MAP GENERATOR v4 — Continuous Terrain World Generator
-#  Upgrades over v3:
-#   • Ground is ONE continuous heightmapped mesh (SurfaceTool, per-vertex height
-#     and per-vertex color) instead of 40,000 separate flat tile planes + vertical
-#     "skirt" boxes. Slopes now interpolate smoothly across triangles, so biomes
-#     physically slope into each other instead of meeting at a hard vertical wall.
-#   • Biome color blending is a true continuous field (distance-based weights,
-#     independent of the per-cell zone classification) so borders read as a
-#     gradient, like hand-painted terrain, not a dithered checkerboard of tiles.
-#   • Slope-aware rock bleed + procedural micro-noise detail (terrain_ground.gdshader)
-#     so large flat regions never read as a single dead-flat color.
-#   • Rivers and ponds use an animated flowing-water shader (water_flow.gdshader)
-#     with real scrolling current, foam streaks, and fresnel edge highlighting,
-#     instead of a static tinted-glass plane.
-#   • Biome borders are noise-warped (no straight rectangle seams between zones)
-#   • A single, consistent winding river definition shared by zone logic AND the
-#     visible water mesh
-#   • Rolling hills via large-scale elevation noise layered under every biome
-#   • Swamp ponds, riverbank reed/lily detail, forest fern understory
-#   • A real road network: center cross-paths PLUS 8 radial roads connecting every
-#     drop zone to the center, so every "land" is physically connected, with soft
-#     feathered dirt-road edges baked into the terrain vertex colors
-#   • Bridges are placed dynamically wherever a road actually crosses the river,
-#     sized and rotated to the true crossing geometry
+#  MAP GENERATOR v5 — Chunked, instanced, streamable world generator
+#
+#  The landscape design from v4 is unchanged and intact: winding rivers, warped
+#  organic biome borders, rolling hills, a radial road network with dynamically
+#  placed bridges, continuous per-vertex biome colour blending, slope-aware rock
+#  bleed and animated water.
+#
+#  What changed is HOW it is put on screen.
+#
+#  v4 emitted the world as loose nodes: one Node3D per grass tuft, one
+#  StaticBody3D with ~11 MeshInstance3D children per tree, a fresh
+#  StandardMaterial3D for practically every part. Measured on a 200x200 map that
+#  produced 113,038 nodes, 88,714 draw calls, 13,510 materials and 1.69 GB of
+#  RAM in 12.6 s — an instant out-of-memory crash on any phone.
+#
+#  v5 emits the same content as instanced geometry:
+#    • Every prop design is baked ONCE into a shared mesh (PropBaker) with a few
+#      randomised variants, then placed as MultiMesh instances — one matrix per
+#      copy instead of a node tree per copy.
+#    • The world is cut into CHUNK_CELLS-sized chunks. Each chunk owns its own
+#      terrain mesh, its MultiMesh batches and ONE collision body, so the engine
+#      can frustum-cull, distance-fade and stream them independently.
+#    • Ground scatter, detail props, midground props and canopy props are split
+#      into draw-distance layers, so grass only renders in the near ring while
+#      trees still read to the horizon.
+#    • Terrain is built directly into packed arrays with analytic normals rather
+#      than through SurfaceTool, so chunk seams are invisible and generation is
+#      an order of magnitude faster.
+#    • Cell data (zone / height / colour / road) lives in flat packed arrays
+#      indexed by y * W + x instead of Dictionary[Vector2i], which removes
+#      hundreds of thousands of hash lookups from the hot loops.
+#
+#  Generation can run synchronously (generate) or time-sliced across frames with
+#  progress reporting (generate_async) so the loading screen stays responsive.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 const PropFactory = preload("res://scenes/world/prop_factory.gd")
+const PropLibrary = preload("res://scenes/world/prop_library.gd")
+const Baker = preload("res://scripts/render/prop_baker.gd")
+const Batcher = preload("res://scripts/render/chunk_batcher.gd")
+const Registry = preload("res://scripts/render/visual_registry.gd")
 const TERRAIN_SHADER = preload("res://assets/shaders/terrain_ground.gdshader")
 const WATER_SHADER = preload("res://assets/shaders/water_flow.gdshader")
+
+# ── Chunking ───────────────────────────────────────────────────────────────────
+## Cells per chunk edge. 20 cells x 2.0 units = a 40x40 unit chunk; a 200x200
+## map becomes a 10x10 grid of them. Small enough to cull usefully, big enough
+## that we don't drown in MultiMesh nodes.
+const CHUNK_CELLS := 20
 
 # ── Biome layout constants (grid-space, 200x200) ────────────────────────────────
 const MARGIN := 10
@@ -52,23 +72,22 @@ const CLEARING_RADIUS := 13.0
 const POND_CENTERS := [Vector2(152.0, 38.0), Vector2(170.0, 55.0)]
 const POND_RADIUS := 6.0
 
-# Continuous-blend falloff widths (grid units) — how far a biome's color/height
-# bleeds into its neighbor before fully transitioning. Larger = softer border.
+# Continuous-blend falloff widths (grid units)
 const BLEND_HIGHLAND := 9.0
 const BLEND_SWAMP := 9.0
 const BLEND_CLEARING := 6.0
 const BLEND_RIVERBANK := 3.0
-const BLEND_FOREST_FLOOR := 0.24 # baseline forest presence everywhere (lets forest bleed through)
+const BLEND_FOREST_FLOOR := 0.24
 
-# Ground biome palette — rich saturated tones (no washed-out whitish grass)
-const COLOR_DROP_ZONE := Color(0.18, 0.38, 0.14)
-const COLOR_FOREST    := Color(0.12, 0.28, 0.10) # Rich deep mossy forest green
-const COLOR_CLEARING  := Color(0.22, 0.48, 0.16) # Sunlit lush green meadow
-const COLOR_RIVERBED  := Color(0.16, 0.22, 0.12) # Dark wet river mud
-const COLOR_HIGHLAND  := Color(0.32, 0.30, 0.26) # Dark weathered granite slate
-const COLOR_SWAMP     := Color(0.14, 0.22, 0.10) # Dark murky wetland
-const COLOR_THRONE    := Color(0.16, 0.10, 0.22) # Deep obsidian black
-const COLOR_PATH      := Color(0.30, 0.22, 0.14) # Rich worn dirt trail
+# Ground biome palette — rich saturated tones
+const COLOR_DROP_ZONE := Color(0.165, 0.300, 0.125)
+const COLOR_FOREST    := Color(0.115, 0.235, 0.105)
+const COLOR_CLEARING  := Color(0.195, 0.360, 0.145)
+const COLOR_RIVERBED  := Color(0.16, 0.22, 0.12)
+const COLOR_HIGHLAND  := Color(0.32, 0.30, 0.26)
+const COLOR_SWAMP     := Color(0.130, 0.195, 0.098)
+const COLOR_THRONE    := Color(0.16, 0.10, 0.22)
+const COLOR_PATH      := Color(0.30, 0.22, 0.14)
 
 const CLOSE_OFFSETS := [Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2)]
 const FAR_OFFSETS := [
@@ -90,6 +109,25 @@ var _drop_coords: Array = [
 	Vector2i(15, 100), Vector2i(185, 100),
 	Vector2i(20, 180), Vector2i(100, 185), Vector2i(180, 180),
 ]
+
+# ── Cell field (flat packed arrays, index = y * W + x) ─────────────────────────
+var _W := 0
+var _H := 0
+var _zone := PackedByteArray()
+var _height := PackedFloat32Array()
+var _vcolor := PackedColorArray()
+var _is_path := PackedByteArray()
+var _field_ready := false
+
+var _chunks_x := 0
+var _chunks_y := 0
+var _chunk_roots: Array = []          # index = cy * _chunks_x + cx -> Node3D
+var _terrain_meshes: Array = []       # index -> ArrayMesh (for lazy collision)
+var _world_seed := 20250820
+
+# Diagnostics
+var last_stats := {}
+
 
 func _init() -> void:
 	_elev_noise.seed = 1337
@@ -120,187 +158,492 @@ func _init() -> void:
 	_pond_noise.frequency = 0.09
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PUBLIC API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+## Build the entire world in one blocking call. Used by tools, tests and the
+## headless benchmark. In-game prefer generate_async().
 func generate(world_node: Node3D) -> void:
-	var grid_size = Constants.GRID_SIZE
-	var tile_dim = Constants.TILE_SIZE
-	var center_grid = grid_size / 2
+	var t0 := Time.get_ticks_msec()
+	var containers := _prepare(world_node)
+	var t_field := Time.get_ticks_msec()
 
-	var ground_container := Node3D.new()
-	ground_container.name = "GroundTiles"
-	world_node.add_child(ground_container)
+	for ci in range(_chunks_x * _chunks_y):
+		_build_chunk(containers.chunks, ci, true)
+	var t_chunks := Time.get_ticks_msec()
 
-	var water_container := Node3D.new()
-	water_container.name = "WaterSurfaces"
-	world_node.add_child(water_container)
+	_build_landmarks(containers.landmarks)
+	_generate_river_water_mesh(containers.water, Constants.GRID_SIZE, Constants.TILE_SIZE, Constants.GRID_SIZE / 2)
+	_generate_pond_water_mesh(containers.water, Constants.TILE_SIZE, Constants.GRID_SIZE / 2)
+	_generate_bridges(containers.landmarks, Constants.GRID_SIZE, Constants.TILE_SIZE, Constants.GRID_SIZE / 2, _drop_coords)
+	var t_end := Time.get_ticks_msec()
 
-	var scatter_container := Node3D.new()
-	scatter_container.name = "GroundScatter"
-	world_node.add_child(scatter_container)
+	last_stats = {
+		"field_ms": t_field - t0,
+		"chunks_ms": t_chunks - t_field,
+		"landmarks_ms": t_end - t_chunks,
+		"total_ms": t_end - t0,
+		"chunks": _chunks_x * _chunks_y,
+	}
 
-	var props_container := Node3D.new()
-	props_container.name = "Props"
-	world_node.add_child(props_container)
 
-	var bridges_container := Node3D.new()
-	bridges_container.name = "Bridges"
-	world_node.add_child(bridges_container)
+## Time-sliced generation. Yields back to the engine roughly every `budget_ms`
+## so a loading screen keeps animating instead of freezing. `on_progress` is
+## called with (fraction 0..1, stage_text).
+func generate_async(world_node: Node3D, tree: SceneTree, on_progress: Callable = Callable(),
+		budget_ms: int = 8) -> void:
+	var _report := func(f: float, s: String) -> void:
+		if on_progress.is_valid():
+			on_progress.call(f, s)
 
-	# 1. Pre-pass: compute zone + height for every cell ONCE, cache both.
-	#    (v2 called determine_zone twice per tile during generation; caching here
-	# 1. Pre-calculate the road network: center cross-roads + 8 radial roads
-	#    connecting every drop zone to the throne, so every part of the map is
-	#    physically reachable by land instead of isolated behind a river band.
-	var path_cells := _calculate_path_network(grid_size, center_grid, _drop_coords)
+	_report.call(0.02, "Surveying the forest")
+	var containers := _prepare(world_node)
+	await tree.process_frame
 
-	# 2. Pre-pass: compute zone + height for every cell ONCE, cache both.
-	var zone_grid := {}
-	var height_grid := {}
-	for y in range(grid_size.y):
-		for x in range(grid_size.x):
+	_report.call(0.30, "Baking props")
+	PropLibrary.warm_all()
+	await tree.process_frame
+
+	var total := _chunks_x * _chunks_y
+	var slice_start := Time.get_ticks_msec()
+	for ci in range(total):
+		_build_chunk(containers.chunks, ci, true)
+		if Time.get_ticks_msec() - slice_start >= budget_ms:
+			_report.call(0.30 + 0.62 * (float(ci + 1) / float(total)), "Growing the forest")
+			await tree.process_frame
+			slice_start = Time.get_ticks_msec()
+
+	_report.call(0.93, "Carving rivers")
+	_generate_river_water_mesh(containers.water, Constants.GRID_SIZE, Constants.TILE_SIZE, Constants.GRID_SIZE / 2)
+	_generate_pond_water_mesh(containers.water, Constants.TILE_SIZE, Constants.GRID_SIZE / 2)
+	await tree.process_frame
+
+	_report.call(0.97, "Raising landmarks")
+	_build_landmarks(containers.landmarks)
+	_generate_bridges(containers.landmarks, Constants.GRID_SIZE, Constants.TILE_SIZE, Constants.GRID_SIZE / 2, _drop_coords)
+	_report.call(1.0, "Ready")
+
+
+# ─── Cell field accessors (used by AI, build system, resource field) ──────────
+
+func is_field_ready() -> bool:
+	return _field_ready
+
+
+func zone_at(x: int, y: int) -> int:
+	if x < 0 or y < 0 or x >= _W or y >= _H:
+		return Constants.ZoneType.DENSE_FOREST
+	return _zone[y * _W + x]
+
+
+func height_at(x: int, y: int) -> float:
+	if x < 0 or y < 0 or x >= _W or y >= _H:
+		return 0.0
+	return _height[y * _W + x]
+
+
+## Smooth terrain height at an arbitrary world position (bilinear).
+func height_at_world(world_pos: Vector3) -> float:
+	var tile := Constants.TILE_SIZE
+	var c := Constants.GRID_SIZE / 2
+	var fx: float = world_pos.x / tile.x + float(c.x)
+	var fy: float = world_pos.z / tile.y + float(c.y)
+	var x0 := int(floor(fx))
+	var y0 := int(floor(fy))
+	var tx: float = fx - float(x0)
+	var ty: float = fy - float(y0)
+	var h00 := height_at(x0, y0)
+	var h10 := height_at(x0 + 1, y0)
+	var h01 := height_at(x0, y0 + 1)
+	var h11 := height_at(x0 + 1, y0 + 1)
+	return lerp(lerp(h00, h10, tx), lerp(h01, h11, tx), ty)
+
+
+func is_road(x: int, y: int) -> bool:
+	if x < 0 or y < 0 or x >= _W or y >= _H:
+		return false
+	return _is_path[y * _W + x] != 0
+
+
+func drop_zone_coords() -> Array:
+	return _drop_coords.duplicate()
+
+
+## Deterministic per-cell random, exposed so other systems (resource placement,
+## AI camp siting) can make the same decisions on every client without needing
+## to sync anything.
+func cell_random(x: int, y: int, salt: int) -> float:
+	return _rand01(x, y, salt)
+
+
+func chunk_count() -> Vector2i:
+	return Vector2i(_chunks_x, _chunks_y)
+
+
+func chunk_root(cx: int, cy: int) -> Node3D:
+	var i := cy * _chunks_x + cx
+	if i < 0 or i >= _chunk_roots.size():
+		return null
+	return _chunk_roots[i]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FIELD PRE-PASS — every per-cell value computed once into flat packed arrays
+# ═══════════════════════════════════════════════════════════════════════════════
+
+func _prepare(world_node: Node3D) -> Dictionary:
+	var grid_size: Vector2i = Constants.GRID_SIZE
+	_W = grid_size.x
+	_H = grid_size.y
+	_chunks_x = int(ceil(float(_W) / float(CHUNK_CELLS)))
+	_chunks_y = int(ceil(float(_H) / float(CHUNK_CELLS)))
+
+	var n := _W * _H
+	_zone.resize(n)
+	_height.resize(n)
+	_vcolor.resize(n)
+	_is_path.resize(n)
+
+	# 1. Road network first — height and colour both depend on it.
+	var path_cells := _calculate_path_network(grid_size, grid_size / 2, _drop_coords)
+	for i in range(n):
+		_is_path[i] = 0
+	for k in path_cells.keys():
+		var p: Vector2i = k
+		if p.x >= 0 and p.y >= 0 and p.x < _W and p.y < _H:
+			_is_path[p.y * _W + p.x] = 1
+
+	# 2. Zone + height.
+	for y in range(_H):
+		var row := y * _W
+		for x in range(_W):
 			var gp := Vector2i(x, y)
-			var z = determine_zone(gp, grid_size)
-			zone_grid[gp] = z
-			height_grid[gp] = _calculate_height(x, y, z, path_cells)
+			var z: int = determine_zone(gp, grid_size)
+			_zone[row + x] = z
+			_height[row + x] = _calculate_height(x, y, z, path_cells)
 
-	# 2b. ONE continuous heightmapped ground mesh for the whole map — replaces the
-	#     old 40,000-separate-flat-tile + vertical-skirt-box approach entirely, so
-	#     neighboring biomes physically slope into each other and the color blend
-	#     is a true smooth gradient instead of per-tile snapping.
-	_build_terrain_mesh(ground_container, grid_size, tile_dim, center_grid, zone_grid, height_grid, path_cells)
+	# 3. Vertex colour (needs the finished height field for the slope term).
+	for y in range(_H):
+		var row2 := y * _W
+		for x in range(_W):
+			_vcolor[row2 + x] = _compute_vertex_color(x, y)
 
-	# 3. River water surfaces — ribbons of connected quads that follow the exact
-	#    same winding centerline used by determine_zone(), so the visible water
-	#    always sits precisely on top of the RIVERBED tiles.
-	_generate_river_water_mesh(water_container, grid_size, tile_dim, center_grid)
+	_field_ready = true
 
-	# 4. Pond water surfaces (swamp)
-	_generate_pond_water_mesh(water_container, tile_dim, center_grid)
+	# 4. Scene containers.
+	var chunks := Node3D.new()
+	chunks.name = "Chunks"
+	world_node.add_child(chunks)
 
-	# Scatter materials
-	var grass_mat := StandardMaterial3D.new()
-	grass_mat.albedo_color = Color(0.24, 0.50, 0.22); grass_mat.roughness = 0.85
-	var flower_colors = [Color(0.92, 0.82, 0.20), Color(0.95, 0.95, 0.92), Color(0.75, 0.30, 0.85)]
-	var pebble_mat := StandardMaterial3D.new()
-	pebble_mat.albedo_color = Color(0.48, 0.46, 0.42); pebble_mat.roughness = 0.90
+	var water := Node3D.new()
+	water.name = "WaterSurfaces"
+	world_node.add_child(water)
 
-	# 5. Scatter & Props — ground mesh itself was already built as one continuous
-	#    surface in step 2b above
-	for y in range(grid_size.y):
-		for x in range(grid_size.x):
-			var grid_pos := Vector2i(x, y)
-			var zone = zone_grid[grid_pos]
-			var is_path = path_cells.has(grid_pos) and zone != Constants.ZoneType.RIVERBED and zone != Constants.ZoneType.CURSED_THRONE
+	var landmarks := Node3D.new()
+	landmarks.name = "Landmarks"
+	world_node.add_child(landmarks)
 
-			var world_x = (x - center_grid.x) * tile_dim.x
-			var world_z = (y - center_grid.y) * tile_dim.y
-			var world_y = height_grid[grid_pos]
+	_chunk_roots.clear()
+	_chunk_roots.resize(_chunks_x * _chunks_y)
+	_terrain_meshes.clear()
+	_terrain_meshes.resize(_chunks_x * _chunks_y)
 
-			# Riverbank & pond-edge detail (reeds, lily pads, pebbles)
-			if zone == Constants.ZoneType.RIVERBED:
-				var r0 = randf()
-				if r0 < 0.10:
-					var stone := MeshInstance3D.new()
-					var sm := SphereMesh.new()
-					sm.radius = 0.08 + randf() * 0.08; sm.height = sm.radius * 0.8
-					stone.mesh = sm; stone.material_override = pebble_mat
-					stone.position = Vector3(world_x + (randf() - 0.5) * 1.5, -0.05, world_z + (randf() - 0.5) * 1.5)
-					scatter_container.add_child(stone)
-				elif r0 < 0.14 and _is_riverbank_edge(grid_pos, zone_grid):
-					var reeds = PropFactory.build_reed_cluster()
-					reeds.position = Vector3(world_x, world_y, world_z)
-					scatter_container.add_child(reeds)
-				elif r0 < 0.17:
-					var lily = PropFactory.build_lily_pad()
-					lily.position = Vector3(world_x, -0.04, world_z)
-					scatter_container.add_child(lily)
+	return {"chunks": chunks, "water": water, "landmarks": landmarks}
 
-			# Ground Scatter
-			elif not is_path:
-				_spawn_ground_scatter(scatter_container, zone, Vector3(world_x, world_y, world_z), grass_mat, flower_colors, pebble_mat)
 
-			# Path-lining Environmental Objects (Torch posts, lanterns, carts, signs along roads)
-			if is_path and (x % 14 == 0 or y % 14 == 0) and randf() < 0.35:
-				var path_prop: Node3D = null
-				var pr = randf()
-				if pr < 0.45: path_prop = PropFactory.build_torch_post()
-				elif pr < 0.70: path_prop = PropFactory.build_hanging_lantern_post()
-				elif pr < 0.85: path_prop = PropFactory.build_warning_sign()
-				else: path_prop = PropFactory.build_abandoned_cart()
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CHUNK BUILD — terrain slab + instanced scatter + one collision body
+# ═══════════════════════════════════════════════════════════════════════════════
 
-				if path_prop:
-					path_prop.position = Vector3(world_x + (randf() - 0.5) * 1.2, world_y, world_z + (randf() - 0.5) * 1.2)
-					props_container.add_child(path_prop)
+func _build_chunk(parent: Node3D, chunk_index: int, with_collision: bool) -> Node3D:
+	var cx := chunk_index % _chunks_x
+	var cy := chunk_index / _chunks_x
+	var tile := Constants.TILE_SIZE
+	var center_grid: Vector2i = Constants.GRID_SIZE / 2
 
-			# Environment Props & Trees — High density (0.11 base rate) with 6 tree types & environmental storytelling
-			if zone != Constants.ZoneType.CURSED_THRONE and zone != Constants.ZoneType.DROP_ZONE and zone != Constants.ZoneType.RIVERBED and not is_path:
-				var border_info = _neighbor_zone_info(grid_pos, zone, zone_grid)
-				var density_scale = 1.0 - border_info.blend * 0.40
-				if randf() < 0.11 * density_scale:
-					var prop_node: Node3D = null
-					var r = randf()
+	var x0 := cx * CHUNK_CELLS
+	var y0 := cy * CHUNK_CELLS
+	var x1: int = min(x0 + CHUNK_CELLS, _W - 1)
+	var y1: int = min(y0 + CHUNK_CELLS, _H - 1)
+	if x0 >= x1 or y0 >= y1:
+		return null
 
-					match zone:
-						Constants.ZoneType.DENSE_FOREST:
-							if r < 0.28: prop_node = PropFactory.build_tree("pine")
-							elif r < 0.48: prop_node = PropFactory.build_tree("oak")
-							elif r < 0.62: prop_node = PropFactory.build_tree("birch")
-							elif r < 0.72: prop_node = PropFactory.build_dense_bush()
-							elif r < 0.80: prop_node = PropFactory.build_tree("canopy")
-							elif r < 0.87: prop_node = PropFactory.build_vine_stump()
-							elif r < 0.93: prop_node = PropFactory.build_fern_cluster()
-							elif r < 0.97: prop_node = PropFactory.build_vine_archway()
-							else: prop_node = PropFactory.build_fallen_log()
+	# Chunk origin sits at the centre of its cell block, so per-chunk distance
+	# culling and visibility ranges measure from somewhere sensible.
+	var mid_gx := (x0 + x1) * 0.5
+	var mid_gy := (y0 + y1) * 0.5
+	var origin := Vector3(
+		(mid_gx - float(center_grid.x)) * tile.x,
+		0.0,
+		(mid_gy - float(center_grid.y)) * tile.y)
 
-						Constants.ZoneType.OPEN_CLEARING:
-							if r < 0.25: prop_node = PropFactory.build_tree("birch")
-							elif r < 0.45: prop_node = PropFactory.build_tree("oak")
-							elif r < 0.62: prop_node = PropFactory.build_dense_bush()
-							elif r < 0.75: prop_node = PropFactory.build_berry_bush()
-							elif r < 0.85: prop_node = PropFactory.build_tall_grass()
-							elif r < 0.92: prop_node = PropFactory.build_rock("mossy")
-							elif r < 0.97: prop_node = PropFactory.build_rock("boulder")
-							else: prop_node = PropFactory.build_broken_weapons()
+	var root := Node3D.new()
+	root.name = "Chunk_%d_%d" % [cx, cy]
+	root.position = origin
+	parent.add_child(root)
+	_chunk_roots[chunk_index] = root
 
-						Constants.ZoneType.ROCKY_HIGHLANDS:
-							if r < 0.35: prop_node = PropFactory.build_rock("boulder")
-							elif r < 0.55: prop_node = PropFactory.build_rock("mossy")
-							elif r < 0.72: prop_node = PropFactory.build_rock("ore_vein")
-							elif r < 0.85: prop_node = PropFactory.build_rock("cluster")
-							elif r < 0.93: prop_node = PropFactory.build_animal_skull()
-							else: prop_node = PropFactory.build_hill_rock_pile()
+	# ── Terrain slab ──────────────────────────────────────────────────────────
+	var terrain_mesh := _build_terrain_slab(x0, y0, x1, y1, origin)
+	_terrain_meshes[chunk_index] = terrain_mesh
 
-						Constants.ZoneType.SWAMP:
-							if r < 0.28: prop_node = PropFactory.build_tree("willow")
-							elif r < 0.52: prop_node = PropFactory.build_tree("dead")
-							elif r < 0.68: prop_node = PropFactory.build_herb_plant()
-							elif r < 0.82: prop_node = PropFactory.build_mushroom_cluster()
-							elif r < 0.92: prop_node = PropFactory.build_reed_cluster()
-							else: prop_node = PropFactory.build_bone_pile()
+	var terrain_mi := MeshInstance3D.new()
+	terrain_mi.name = "Terrain"
+	terrain_mi.mesh = terrain_mesh
+	terrain_mi.material_override = _terrain_material()
+	terrain_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(terrain_mi)
 
-					if prop_node:
-						prop_node.position = Vector3(world_x, world_y, world_z)
-						prop_node.rotation.y = randf() * TAU
-						props_container.add_child(prop_node)
+	if with_collision:
+		_attach_terrain_collision(root, terrain_mesh)
 
-	# 6. Central Cursed Throne Altar
-	var throne = PropFactory.build_cursed_throne()
-	throne.position = Vector3(0, 0.4, 0)
-	props_container.add_child(throne)
+	# ── Scatter: one batcher per draw-distance layer ──────────────────────────
+	var layers := {
+		PropLibrary.Layer.CANOPY: Batcher.new(),
+		PropLibrary.Layer.MIDGROUND: Batcher.new(),
+		PropLibrary.Layer.DETAIL: Batcher.new(),
+		PropLibrary.Layer.GROUND: Batcher.new(),
+	}
 
-	# 7. Giant Beast Skeleton Fossils
-	var skel1 = PropFactory.build_beast_skeleton()
-	skel1.position = Vector3(50 * tile_dim.x, 0.0, -30 * tile_dim.y)
-	props_container.add_child(skel1)
+	for gy in range(y0, y1):
+		var row := gy * _W
+		for gx in range(x0, x1):
+			var zone: int = _zone[row + gx]
+			var on_road: bool = _is_path[row + gx] != 0
+			var wx: float = (float(gx) - float(center_grid.x)) * tile.x
+			var wz: float = (float(gy) - float(center_grid.y)) * tile.y
+			var wy: float = _height[row + gx]
+			var local := Vector3(wx, wy, wz) - origin
 
-	var skel2 = PropFactory.build_beast_skeleton()
-	skel2.position = Vector3(-45 * tile_dim.x, 0.0, 40 * tile_dim.y)
-	props_container.add_child(skel2)
+			_scatter_cell(layers, gx, gy, zone, on_road, local)
 
-	# 8. Wooden River Bridges — computed dynamically from where the 8 radial roads
-	#    actually intersect the winding river, correctly sized & rotated per crossing.
-	_generate_bridges(bridges_container, grid_size, tile_dim, center_grid, _drop_coords)
+	var made_batches := 0
+	for layer in layers.keys():
+		var b = layers[layer]
+		if b.is_empty():
+			continue
+		made_batches += b.flush_visuals(root,
+			PropLibrary.LAYER_RANGE[layer],
+			PropLibrary.LAYER_FADE[layer],
+			PropLibrary.LAYER_SHADOWS[layer],
+			PropLibrary.LAYER_FAR_RANGE[layer],
+			PropLibrary.LAYER_FAR_FRACTION[layer])
+		if with_collision:
+			b.flush_collision(root, 1, 1)
 
-	# 9. 8 Squad Camps
+	return root
+
+
+## Decide what (if anything) grows on one cell and push it into the batchers.
+func _scatter_cell(layers: Dictionary, gx: int, gy: int, zone: int, on_road: bool, local: Vector3) -> void:
+	var in_clearing := _in_clearing(gx, gy)
+
+	# 1. Big scatter (trees, rocks, bushes...)
+	var blocked: bool = in_clearing \
+		or zone == Constants.ZoneType.CURSED_THRONE \
+		or zone == Constants.ZoneType.RIVERBED
+	if not blocked and not on_road:
+		var density := PropLibrary.density_for(zone)
+		if density > 0.0:
+			# Thin out props near a biome border so zones bleed instead of ending
+			# in a hard wall of trees.
+			var border := _border_blend(gx, gy, zone)
+			density *= (1.0 - border * 0.40)
+			if _rand01(gx, gy, 11) < density:
+				var key := PropLibrary.pick_for_biome(zone, _rand01(gx, gy, 23))
+				if key != "":
+					_place(layers, key, gx, gy, local, 31)
+
+	# 2. Riverbank detail — reeds, lilies, driftwood at the water's edge.
+	if zone == Constants.ZoneType.RIVERBED and _is_riverbank_cell(gx, gy):
+		if _rand01(gx, gy, 43) < 0.22:
+			var rkey := PropLibrary.pick_river_edge(_rand01(gx, gy, 47))
+			if rkey != "":
+				var lp := local
+				if rkey == "lily_pad":
+					lp.y = -0.04 - local.y + local.y  # lilies float on the surface
+					lp = Vector3(local.x, -0.04, local.z)
+				_place(layers, rkey, gx, gy, lp, 53)
+
+	# 3. Roadside furniture — lanterns, signs, carts along the radial roads.
+	if on_road and (gx % 13 == 0 or gy % 13 == 0) and _rand01(gx, gy, 59) < 0.30:
+		var r := _rand01(gx, gy, 61)
+		var road_key := "torch_post"
+		if r < 0.40: road_key = "torch_post"
+		elif r < 0.68: road_key = "lantern_post"
+		elif r < 0.85: road_key = "sign"
+		else: road_key = "trail_marker"
+		_place(layers, road_key, gx, gy, local, 67)
+
+	# 4. Ground cover — grass, flowers, pebbles. Never on the road surface.
+	if not on_road:
+		var chance := PropLibrary.cover_chance(zone)
+		if chance > 0.0 and _rand01(gx, gy, 71) < chance:
+			var ckey := PropLibrary.pick_cover(zone, _rand01(gx, gy, 73))
+			if ckey != "":
+				_place(layers, ckey, gx, gy, local, 79)
+				# A second, offset tuft on a fraction of cells breaks up the grid.
+				if _rand01(gx, gy, 83) < 0.45:
+					_place(layers, ckey, gx, gy, local, 89)
+
+
+func _place(layers: Dictionary, key: String, gx: int, gy: int, local: Vector3, salt: int) -> void:
+	var d := PropLibrary.def(key)
+	if d.is_empty():
+		return
+	var variant := int(_rand01(gx, gy, salt + 1) * float(PropLibrary.VARIANTS))
+	var tpl := PropLibrary.template(key, variant)
+	if tpl.is_empty() or tpl.get("mesh") == null:
+		return
+
+	var sc_range: Array = d.scale
+	var s: float = lerp(float(sc_range[0]), float(sc_range[1]), _rand01(gx, gy, salt + 2))
+	var yaw: float = _rand01(gx, gy, salt + 3) * TAU
+	# Sub-cell jitter so nothing lines up on the lattice.
+	var jx: float = (_rand01(gx, gy, salt + 4) - 0.5) * Constants.TILE_SIZE.x * 0.85
+	var jz: float = (_rand01(gx, gy, salt + 5) - 0.5) * Constants.TILE_SIZE.y * 0.85
+
+	var xf := Transform3D(Basis.IDENTITY, local + Vector3(jx, 0.0, jz))
+	xf.basis = Basis(Vector3.UP, yaw).scaled(Vector3(s, s, s))
+
+	var t_range: Array = d.tint
+	var t: float = lerp(float(t_range[0]), float(t_range[1]), _rand01(gx, gy, salt + 6))
+	# A touch of independent hue drift keeps a forest from looking like one
+	# tree brightened up and down.
+	var hue_drift: float = (_rand01(gx, gy, salt + 7) - 0.5) * 0.10
+	var tint := Color(
+		clamp(t - hue_drift * 0.5, 0.0, 2.0),
+		clamp(t + hue_drift, 0.0, 2.0),
+		clamp(t - hue_drift, 0.0, 2.0), 1.0)
+
+	var layer: int = d.layer
+	layers[layer].add_template(tpl, xf, tint, bool(d.solid))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TERRAIN SLAB — direct packed-array mesh build with analytic normals so
+#  neighbouring chunks share exactly the same normal at their seam.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+func _build_terrain_slab(x0: int, y0: int, x1: int, y1: int, origin: Vector3) -> ArrayMesh:
+	var tile := Constants.TILE_SIZE
+	var center_grid: Vector2i = Constants.GRID_SIZE / 2
+	var vw := x1 - x0 + 1
+	var vh := y1 - y0 + 1
+	var vcount := vw * vh
+
+	var verts := PackedVector3Array(); verts.resize(vcount)
+	var norms := PackedVector3Array(); norms.resize(vcount)
+	var cols := PackedColorArray(); cols.resize(vcount)
+	var uvs := PackedVector2Array(); uvs.resize(vcount)
+
+	var inv_dx: float = 1.0 / (2.0 * tile.x)
+	var inv_dz: float = 1.0 / (2.0 * tile.y)
+
+	for j in range(vh):
+		var gy := y0 + j
+		for i in range(vw):
+			var gx := x0 + i
+			var idx := j * vw + i
+			var wx: float = (float(gx) - float(center_grid.x)) * tile.x
+			var wz: float = (float(gy) - float(center_grid.y)) * tile.y
+			var wy := height_at(gx, gy)
+			verts[idx] = Vector3(wx, wy, wz) - origin
+
+			var hl := height_at(gx - 1, gy)
+			var hr := height_at(gx + 1, gy)
+			var hu := height_at(gx, gy - 1)
+			var hd := height_at(gx, gy + 1)
+			norms[idx] = Vector3((hl - hr) * inv_dx, 1.0, (hu - hd) * inv_dz).normalized()
+
+			cols[idx] = _vcolor[gy * _W + gx]
+			uvs[idx] = Vector2(wx, wz) * 0.5
+
+	var indices := PackedInt32Array()
+	indices.resize((vw - 1) * (vh - 1) * 6)
+	var k := 0
+	for j in range(vh - 1):
+		for i in range(vw - 1):
+			var a := j * vw + i
+			var b := a + 1
+			var c := a + vw
+			var d := c + 1
+			indices[k] = a; indices[k + 1] = b; indices[k + 2] = d
+			indices[k + 3] = a; indices[k + 4] = d; indices[k + 5] = c
+			k += 6
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_COLOR] = cols
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _attach_terrain_collision(root: Node3D, mesh: ArrayMesh) -> StaticBody3D:
+	if mesh == null:
+		return null
+	var body := StaticBody3D.new()
+	body.name = "TerrainCollision"
+	body.collision_layer = 1
+	body.collision_mask = 1
+	var cs := CollisionShape3D.new()
+	cs.shape = mesh.create_trimesh_shape()
+	body.add_child(cs)
+	root.add_child(body)
+	return body
+
+
+## Build (or free) a chunk's terrain collision on demand — only chunks near a
+## living entity need to be solid.
+func set_chunk_collision(chunk_index: int, enabled: bool) -> void:
+	if chunk_index < 0 or chunk_index >= _chunk_roots.size():
+		return
+	var root: Node3D = _chunk_roots[chunk_index]
+	if root == null:
+		return
+	var existing := root.get_node_or_null("TerrainCollision")
+	if enabled and existing == null:
+		_attach_terrain_collision(root, _terrain_meshes[chunk_index])
+	elif not enabled and existing != null:
+		existing.queue_free()
+
+
+var _terrain_mat: ShaderMaterial = null
+
+func _terrain_material() -> ShaderMaterial:
+	if _terrain_mat == null:
+		_terrain_mat = ShaderMaterial.new()
+		_terrain_mat.shader = TERRAIN_SHADER
+	return _terrain_mat
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LANDMARKS — one-off hero pieces. Few enough to stay as real nodes.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+func _build_landmarks(container: Node3D) -> void:
+	var tile := Constants.TILE_SIZE
+	var center_grid: Vector2i = Constants.GRID_SIZE / 2
+
+	# Landmarks are one-offs, so they stay real nodes — but they are baked too,
+	# because a squad camp is ~40 MeshInstance3D children out of the factory and
+	# eight of them was 320 draw calls for scenery nobody stands next to.
+	_place_landmark(container, "throne", func(): return PropFactory.build_cursed_throne(),
+			Vector3(0, 0.4, 0), 0.0)
+
+	var skel_spots := [Vector2i(50, -30), Vector2i(-45, 40)]
+	for i in range(skel_spots.size()):
+		var sp: Vector2i = skel_spots[i]
+		_place_landmark(container, "skeleton", func(): return PropFactory.build_beast_skeleton(),
+				Vector3(sp.x * tile.x, 0.0, sp.y * tile.y), float(i) * 1.1)
+
 	var squad_colors = [
 		Color(0.85, 0.25, 0.20), Color(0.20, 0.55, 0.90),
 		Color(0.25, 0.80, 0.35), Color(0.90, 0.75, 0.15),
@@ -308,40 +651,151 @@ func generate(world_node: Node3D) -> void:
 		Color(0.90, 0.50, 0.15), Color(0.60, 0.65, 0.70),
 	]
 	for i in range(_drop_coords.size()):
-		var dc = _drop_coords[i]
-		var cpos = Vector3((dc.x - center_grid.x) * tile_dim.x, 0.0, (dc.y - center_grid.y) * tile_dim.y)
-		var camp = PropFactory.build_squad_camp(squad_colors[i])
-		camp.position = cpos
-		props_container.add_child(camp)
+		var dc: Vector2i = _drop_coords[i]
+		var col: Color = squad_colors[i]
+		_place_landmark(container, "camp_%d" % i, func(): return PropFactory.build_squad_camp(col),
+				Vector3((dc.x - center_grid.x) * tile.x, height_at(dc.x, dc.y),
+						(dc.y - center_grid.y) * tile.y), 0.0)
 
-	# 10. Ruined Stone Arches
 	for z_off in [-8.0, 8.0]:
-		var arch = PropFactory.build_ruined_arch()
-		arch.position = Vector3(0, 0.4, z_off)
-		props_container.add_child(arch)
+		_place_landmark(container, "arch", func(): return PropFactory.build_ruined_arch(),
+				Vector3(0, 0.4, z_off), 0.0)
 
-	# 11. NPC Vendor Stalls
-	var v1 = PropFactory.build_vendor_stall(false)
-	v1.position = Vector3(-40 * tile_dim.x, 0.0, 0.0)
-	props_container.add_child(v1)
+	for vx in [-40, 40]:
+		_place_landmark(container, "vendor", func(): return PropFactory.build_vendor_stall(false),
+				Vector3(vx * tile.x, height_at(center_grid.x + vx, center_grid.y), 0.0), 0.0)
 
-	var v2 = PropFactory.build_vendor_stall(false)
-	v2.position = Vector3(40 * tile_dim.x, 0.0, 0.0)
-	props_container.add_child(v2)
+	for spec2 in [Vector2i(-30, -30), Vector2i(30, 30)]:
+		_place_landmark(container, "stone_circle", func(): return PropFactory.build_stone_circle(),
+				Vector3(spec2.x * tile.x,
+						height_at(center_grid.x + spec2.x, center_grid.y + spec2.y),
+						spec2.y * tile.y), 0.0)
 
-	# 12. Ancient Stone Circles (Ritual site landmarks in clearings)
-	var sc1 = PropFactory.build_stone_circle()
-	sc1.position = Vector3(-30 * tile_dim.x, 0.0, -30 * tile_dim.y)
-	props_container.add_child(sc1)
 
-	var sc2 = PropFactory.build_stone_circle()
-	sc2.position = Vector3(30 * tile_dim.x, 0.0, 30 * tile_dim.y)
-	props_container.add_child(sc2)
+func _place_landmark(container: Node3D, key: String, builder: Callable,
+		pos: Vector3, yaw: float) -> Node3D:
+	var tpl := Baker.get_template("landmark_" + key, builder, 0)
+	if tpl.is_empty() or tpl.get("mesh") == null:
+		return null
+	var node := Baker.instantiate(tpl, true, true, "Landmark_" + key)
+	node.position = pos
+	node.rotation.y = yaw
+	container.add_child(node)
+	return node
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  RIVER GEOMETRY — single source of truth used by zone classification, the water
-#  mesh, AND bridge placement so all three always agree with each other.
+#  HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+## Cells inside a clearing get no scattered props at all. Squads spawn into a
+## usable camp instead of the inside of a tree, and hero landmarks stay readable
+## instead of being swallowed by the canopy.
+const CLEARING_SPOTS := [
+	# [grid_x, grid_y, radius_in_cells]
+	[100, 100, 9],                 # Cursed Throne plaza
+	[60, 100, 5], [140, 100, 5],   # NPC vendor stalls
+	[70, 70, 4], [130, 130, 4],    # ancient stone circles
+]
+const DROP_ZONE_CLEAR_RADIUS := 8
+
+
+## True when this cell must stay empty of scatter.
+func _in_clearing(gx: int, gy: int) -> bool:
+	for dc in _drop_coords:
+		var dx: int = gx - dc.x
+		var dy: int = gy - dc.y
+		if dx * dx + dy * dy <= DROP_ZONE_CLEAR_RADIUS * DROP_ZONE_CLEAR_RADIUS:
+			return true
+	for spot in CLEARING_SPOTS:
+		var ex: int = gx - int(spot[0])
+		var ey: int = gy - int(spot[1])
+		var r: int = int(spot[2])
+		if ex * ex + ey * ey <= r * r:
+			return true
+	return false
+
+
+## Cheap deterministic per-cell random in [0,1). Deterministic means the map is
+## identical for every client and reproducible in bug reports.
+func _rand01(x: int, y: int, salt: int) -> float:
+	var n: int = x * 374761393 + y * 668265263 + salt * 2246822519 + _world_seed
+	n = (n ^ (n >> 13)) * 1274126177
+	n = n ^ (n >> 16)
+	return float(n & 0x7FFFFFFF) / 2147483647.0
+
+
+func _is_riverbank_cell(gx: int, gy: int) -> bool:
+	for off in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if zone_at(gx + off.x, gy + off.y) != Constants.ZoneType.RIVERBED:
+			return true
+	return false
+
+
+## 0 = deep inside a biome, 1 = right on a border. Used to thin prop density so
+## biomes fade into each other.
+func _border_blend(gx: int, gy: int, own_zone: int) -> float:
+	for off in CLOSE_OFFSETS:
+		if zone_at(gx + off.x, gy + off.y) != own_zone:
+			return 0.60
+	for off2 in FAR_OFFSETS:
+		if zone_at(gx + off2.x, gy + off2.y) != own_zone:
+			return 0.28
+	return 0.0
+
+
+func _compute_vertex_color(x: int, y: int) -> Color:
+	var gp := Vector2i(x, y)
+	var zone: int = _zone[y * _W + x]
+
+	if zone == Constants.ZoneType.CURSED_THRONE:
+		return COLOR_THRONE.lerp(Color(0.30, 0.24, 0.36), _hash01(x, y) * 0.25)
+	if zone == Constants.ZoneType.DROP_ZONE:
+		var dz_jitter: float = (_hash01(x, y) - 0.5) * 0.10
+		return Color(
+			clamp(COLOR_DROP_ZONE.r + dz_jitter, 0.0, 1.0),
+			clamp(COLOR_DROP_ZONE.g + dz_jitter, 0.0, 1.0),
+			clamp(COLOR_DROP_ZONE.b + dz_jitter, 0.0, 1.0))
+
+	var pos := Vector2(x, y)
+	var weights := _biome_weights(pos)
+	var col: Color = COLOR_FOREST * weights.forest \
+		+ COLOR_CLEARING * weights.clearing \
+		+ COLOR_HIGHLAND * weights.highland \
+		+ COLOR_SWAMP * weights.swamp
+
+	col = col.lerp(COLOR_RIVERBED, _river_bank_blend(pos))
+
+	var slope := _slope_at_xy(x, y)
+	col = col.lerp(COLOR_HIGHLAND * 0.85, clamp(slope * 1.8, 0.0, 0.55))
+
+	col = col.lerp(COLOR_PATH, _path_blend_xy(x, y))
+
+	var micro: float = (_hash01(x * 7 + 3, y * 7 + 11) - 0.5) * 0.06
+	return Color(
+		clamp(col.r + micro, 0.0, 1.0),
+		clamp(col.g + micro * 0.9, 0.0, 1.0),
+		clamp(col.b + micro * 0.8, 0.0, 1.0))
+
+
+func _slope_at_xy(x: int, y: int) -> float:
+	var h0 := height_at(x, y)
+	return abs(height_at(x + 1, y) - h0) + abs(height_at(x, y + 1) - h0)
+
+
+func _path_blend_xy(x: int, y: int) -> float:
+	var count := 0
+	for ox in range(-2, 3):
+		for oy in range(-2, 3):
+			if is_road(x + ox, y + oy):
+				count += 1
+	return float(count) / 25.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PRESERVED LANDSCAPE MATHS — river geometry, road network, elevation, biome
+#  weighting and zone classification are unchanged from v4. This is the design
+#  of the world; only its rendering strategy was rebuilt above.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 func _river_center(y: float, side: int) -> float:
@@ -371,7 +825,6 @@ func _is_in_pond(x: float, y: float) -> bool:
 			return true
 	return false
 
-
 func _make_water_material(shallow: Color, deep: Color, speed: float, wave_scale: float, foam: float) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = WATER_SHADER
@@ -381,7 +834,6 @@ func _make_water_material(shallow: Color, deep: Color, speed: float, wave_scale:
 	mat.set_shader_parameter("wave_scale", wave_scale)
 	mat.set_shader_parameter("foam_amount", foam)
 	return mat
-
 
 func _generate_river_water_mesh(water_container: Node3D, grid_size: Vector2i, tile_dim: Vector2, center_grid: Vector2i) -> void:
 	# Flows roughly south -> north along the winding riverbed centerline
@@ -408,7 +860,6 @@ func _generate_river_water_mesh(water_container: Node3D, grid_size: Vector2i, ti
 			water_container.add_child(seg)
 			y += segment_span
 
-
 func _generate_pond_water_mesh(water_container: Node3D, tile_dim: Vector2, center_grid: Vector2i) -> void:
 	# Ponds get a slower, murkier, more still current than the open river
 	var water_mat := _make_water_material(
@@ -422,18 +873,6 @@ func _generate_pond_water_mesh(water_container: Node3D, tile_dim: Vector2, cente
 		seg.material_override = water_mat
 		seg.position = Vector3((pc.x - center_grid.x) * tile_dim.x, -0.07, (pc.y - center_grid.y) * tile_dim.y)
 		water_container.add_child(seg)
-
-
-func _is_riverbank_edge(pos: Vector2i, zone_grid: Dictionary) -> bool:
-	for off in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-		if zone_grid.get(pos + off, Constants.ZoneType.RIVERBED) != Constants.ZoneType.RIVERBED:
-			return true
-	return false
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  ROAD NETWORK & BRIDGES
-# ═══════════════════════════════════════════════════════════════════════════════
 
 func _calculate_path_network(grid_size: Vector2i, center: Vector2i, drop_coords: Array) -> Dictionary:
 	var paths := {}
@@ -453,7 +892,6 @@ func _calculate_path_network(grid_size: Vector2i, center: Vector2i, drop_coords:
 
 	return paths
 
-
 func _mark_line(paths: Dictionary, a: Vector2, b: Vector2, half_width: int) -> void:
 	var dist = a.distance_to(b)
 	var steps = max(1, int(dist))
@@ -465,7 +903,6 @@ func _mark_line(paths: Dictionary, a: Vector2, b: Vector2, half_width: int) -> v
 		for ox in range(-half_width, half_width + 1):
 			for oy in range(-half_width, half_width + 1):
 				paths[Vector2i(cx + ox, cy + oy)] = true
-
 
 func _generate_bridges(container: Node3D, grid_size: Vector2i, tile_dim: Vector2, center_grid: Vector2i, drop_coords: Array) -> void:
 	for dc in drop_coords:
@@ -479,7 +916,6 @@ func _generate_bridges(container: Node3D, grid_size: Vector2i, tile_dim: Vector2
 			bridge.position = Vector3((c.x - center_grid.x) * tile_dim.x, 0.0, (c.y - center_grid.y) * tile_dim.y)
 			bridge.rotation.y = atan2(dir.x, dir.y)
 			container.add_child(bridge)
-
 
 func _find_river_crossings(a: Vector2, b: Vector2) -> Array:
 	var crossings := []
@@ -515,7 +951,6 @@ func _river_distance(pos: Vector2) -> float:
 		var d = abs(pos.x - cx) - (w * 0.5)
 		min_d = min(min_d, d)
 	return min_d
-
 
 func _calculate_height(x: int, y: int, zone: Constants.ZoneType, path_cells: Dictionary = {}) -> float:
 	var base_n = _elev_noise.get_noise_2d(float(x), float(y))
@@ -554,34 +989,6 @@ func _calculate_height(x: int, y: int, zone: Constants.ZoneType, path_cells: Dic
 #  BIOME BORDER BLENDING — soft dithered transition between neighboring zones
 # ═══════════════════════════════════════════════════════════════════════════════
 
-func _neighbor_zone_info(pos: Vector2i, own_zone: Constants.ZoneType, zone_grid: Dictionary) -> Dictionary:
-	var result := {"blend": 0.0, "other": own_zone}
-	var found_close = null
-	var found_far = null
-
-	for off in CLOSE_OFFSETS:
-		var nz = zone_grid.get(pos + off, own_zone)
-		if nz != own_zone:
-			found_close = nz
-			break
-
-	if found_close == null:
-		for off in FAR_OFFSETS:
-			var nz = zone_grid.get(pos + off, own_zone)
-			if nz != own_zone:
-				found_far = nz
-				break
-
-	if found_close != null:
-		result.other = found_close
-		result.blend = 0.60
-	elif found_far != null:
-		result.other = found_far
-		result.blend = 0.28
-
-	return result
-
-
 func _hash01(x: int, y: int) -> float:
 	var n = sin(float(x) * 12.9898 + float(y) * 78.233) * 43758.5453
 	return fmod(abs(n), 1.0)
@@ -593,127 +1000,6 @@ func _hash01(x: int, y: int) -> float:
 #  weighted per-vertex biome color, so slopes and biome borders read as a real
 #  continuous landscape instead of a grid of flat colored boxes.
 # ═══════════════════════════════════════════════════════════════════════════════
-
-func _build_terrain_mesh(container: Node3D, grid_size: Vector2i, tile_dim: Vector2, center_grid: Vector2i,
-		zone_grid: Dictionary, height_grid: Dictionary, path_cells: Dictionary) -> void:
-	var w := grid_size.x
-	var h := grid_size.y
-
-	# Precompute every vertex color once (reused by both triangles of every quad
-	# that touches it) so we don't recompute the same blend 4x per interior vertex.
-	var colors := {}
-	for y in range(h):
-		for x in range(w):
-			var gp := Vector2i(x, y)
-			colors[gp] = _vertex_color(gp, zone_grid, height_grid, path_cells)
-
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	for y in range(h - 1):
-		for x in range(w - 1):
-			var p00 := Vector2i(x, y)
-			var p10 := Vector2i(x + 1, y)
-			var p01 := Vector2i(x, y + 1)
-			var p11 := Vector2i(x + 1, y + 1)
-
-			var v00 := _vertex_pos(p00, tile_dim, center_grid, height_grid)
-			var v10 := _vertex_pos(p10, tile_dim, center_grid, height_grid)
-			var v01 := _vertex_pos(p01, tile_dim, center_grid, height_grid)
-			var v11 := _vertex_pos(p11, tile_dim, center_grid, height_grid)
-
-			_add_tri(st, v00, v10, v11, colors[p00], colors[p10], colors[p11])
-			_add_tri(st, v00, v11, v01, colors[p00], colors[p11], colors[p01])
-
-	st.generate_normals()
-	st.generate_tangents()
-	var mesh := st.commit()
-
-	var static_body := StaticBody3D.new()
-	static_body.name = "ContinuousTerrainBody"
-	static_body.collision_layer = 1
-	static_body.collision_mask = 1
-
-	var mesh_inst := MeshInstance3D.new()
-	mesh_inst.mesh = mesh
-	mesh_inst.material_override = _build_terrain_shader_material()
-	mesh_inst.name = "ContinuousTerrainMesh"
-	static_body.add_child(mesh_inst)
-
-	# Generate exact 3D trimesh physics collision shape for full terrain!
-	var col_shape := CollisionShape3D.new()
-	col_shape.shape = mesh.create_trimesh_shape()
-	static_body.add_child(col_shape)
-
-	container.add_child(static_body)
-
-
-func _add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, ca: Color, cb: Color, cc: Color) -> void:
-	st.set_color(ca); st.set_uv(Vector2(a.x, a.z) * 0.5); st.add_vertex(a)
-	st.set_color(cb); st.set_uv(Vector2(b.x, b.z) * 0.5); st.add_vertex(b)
-	st.set_color(cc); st.set_uv(Vector2(c.x, c.z) * 0.5); st.add_vertex(c)
-
-
-func _vertex_pos(gp: Vector2i, tile_dim: Vector2, center_grid: Vector2i, height_grid: Dictionary) -> Vector3:
-	var wx = (gp.x - center_grid.x) * tile_dim.x
-	var wz = (gp.y - center_grid.y) * tile_dim.y
-	var wy: float = height_grid.get(gp, 0.0)
-	return Vector3(wx, wy, wz)
-
-
-func _build_terrain_shader_material() -> ShaderMaterial:
-	var mat := ShaderMaterial.new()
-	mat.shader = TERRAIN_SHADER
-	return mat
-
-
-func _vertex_color(gp: Vector2i, zone_grid: Dictionary, height_grid: Dictionary, path_cells: Dictionary) -> Color:
-	var zone = zone_grid.get(gp, Constants.ZoneType.DENSE_FOREST)
-
-	# Hard-locked gameplay-critical zones stay visually distinct but still get a
-	# touch of variance so they don't look like a painted-on decal.
-	if zone == Constants.ZoneType.CURSED_THRONE:
-		return COLOR_THRONE.lerp(Color(0.30, 0.24, 0.36), _hash01(gp.x, gp.y) * 0.25)
-	if zone == Constants.ZoneType.DROP_ZONE:
-		var dz_jitter = (_hash01(gp.x, gp.y) - 0.5) * 0.10
-		return Color(
-			clamp(COLOR_DROP_ZONE.r + dz_jitter, 0.0, 1.0),
-			clamp(COLOR_DROP_ZONE.g + dz_jitter, 0.0, 1.0),
-			clamp(COLOR_DROP_ZONE.b + dz_jitter, 0.0, 1.0))
-
-	var pos := Vector2(gp.x, gp.y)
-
-	# Continuous biome weights — a true distance-field blend, independent of the
-	# hard per-cell zone_grid classification used for gameplay logic.
-	var weights = _biome_weights(pos)
-	var col: Color = COLOR_FOREST * weights.forest \
-		+ COLOR_CLEARING * weights.clearing \
-		+ COLOR_HIGHLAND * weights.highland \
-		+ COLOR_SWAMP * weights.swamp
-
-	# River / pond bank blending — grass fades into mud/sand before the water's
-	# edge instead of the biome color cutting off dead against the river polygon.
-	var river_blend = _river_bank_blend(pos)
-	col = col.lerp(COLOR_RIVERBED, river_blend)
-
-	# Slope-aware rock bleed: steep terrain reads as exposed rock/scree, same
-	# trick real open-world terrain systems use so hillsides don't look painted.
-	var slope = _slope_at(gp, height_grid)
-	col = col.lerp(COLOR_HIGHLAND * 0.85, clamp(slope * 1.8, 0.0, 0.55))
-
-	# Dirt road blending — sampled over a small neighborhood so the road edge
-	# feathers smoothly instead of snapping at the path cell boundary.
-	var path_blend = _path_blend_factor(gp, path_cells)
-	col = col.lerp(COLOR_PATH, path_blend)
-
-	# Fine per-vertex micro variation so large flat regions don't read as one
-	# perfectly uniform color even before the shader's procedural detail layer.
-	var micro = (_hash01(gp.x * 7 + 3, gp.y * 7 + 11) - 0.5) * 0.06
-	return Color(
-		clamp(col.r + micro, 0.0, 1.0),
-		clamp(col.g + micro * 0.9, 0.0, 1.0),
-		clamp(col.b + micro * 0.8, 0.0, 1.0))
-
 
 func _biome_weights(pos: Vector2) -> Dictionary:
 	var wx = pos.x + _warp_x.get_noise_2d(pos.x, pos.y) * 9.0
@@ -749,7 +1035,6 @@ func _biome_weights(pos: Vector2) -> Dictionary:
 		"forest": s_forest / total,
 	}
 
-
 func _river_bank_blend(pos: Vector2) -> float:
 	var b := 0.0
 	for side in [-1, 1]:
@@ -762,70 +1047,6 @@ func _river_bank_blend(pos: Vector2) -> float:
 		var d2 = pos.distance_to(pc) - (POND_RADIUS + jitter)
 		b = max(b, clamp(1.0 - d2 / BLEND_RIVERBANK, 0.0, 1.0))
 	return b
-
-
-func _slope_at(gp: Vector2i, height_grid: Dictionary) -> float:
-	var h0: float = height_grid.get(gp, 0.0)
-	var hx: float = height_grid.get(gp + Vector2i(1, 0), h0)
-	var hy: float = height_grid.get(gp + Vector2i(0, 1), h0)
-	return abs(hx - h0) + abs(hy - h0)
-
-
-func _path_blend_factor(gp: Vector2i, path_cells: Dictionary) -> float:
-	var count := 0
-	var total := 0
-	for ox in range(-2, 3):
-		for oy in range(-2, 3):
-			total += 1
-			if path_cells.has(gp + Vector2i(ox, oy)):
-				count += 1
-	return float(count) / float(total)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  GROUND SCATTER (grass tufts etc.)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-func _spawn_ground_scatter(container: Node3D, zone: Constants.ZoneType, pos: Vector3,
-		grass_mat: Material, flower_colors: Array, pebble_mat: Material) -> void:
-	var rng = randf()
-
-	if zone == Constants.ZoneType.OPEN_CLEARING or zone == Constants.ZoneType.DENSE_FOREST or zone == Constants.ZoneType.DROP_ZONE:
-		if rng < 0.42:
-			var tuft := Node3D.new()
-			for i in range(5):
-				var blade := MeshInstance3D.new()
-				var bm := BoxMesh.new()
-				bm.size = Vector3(0.025, 0.18 + randf() * 0.10, 0.012)
-				blade.mesh = bm; blade.material_override = grass_mat
-				var ang = (i / 5.0) * TAU
-				blade.position = Vector3(cos(ang) * 0.05, bm.size.y * 0.5, sin(ang) * 0.05)
-				tuft.add_child(blade)
-
-			# Wildflower blossom
-			if randf() < 0.18:
-				var flower := MeshInstance3D.new()
-				var fm := SphereMesh.new(); fm.radius = 0.035; fm.height = 0.04
-				flower.mesh = fm
-				var fmat := StandardMaterial3D.new()
-				fmat.albedo_color = flower_colors[randi() % flower_colors.size()]
-				flower.material_override = fmat
-				flower.position = Vector3(0, 0.22, 0)
-				tuft.add_child(flower)
-
-			var off_x = (randf() - 0.5) * 1.4
-			var off_z = (randf() - 0.5) * 1.4
-			tuft.position = pos + Vector3(off_x, 0, off_z)
-			container.add_child(tuft)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  ZONE CLASSIFICATION — organic biome shapes via noise-warped region tests.
-#  Throne / Drop Zones / River stay on raw (unwarped) coordinates so gameplay-
-#  critical geometry (spawn fairness, resource-free throne, river crossings)
-#  remains precise and deterministic. Everything else gets warped borders so
-#  biomes bleed into each other like a real landscape instead of clipped boxes.
-# ═══════════════════════════════════════════════════════════════════════════════
 
 func determine_zone(pos: Vector2i, size: Vector2i) -> Constants.ZoneType:
 	var center = size / 2

@@ -1441,3 +1441,128 @@ static func _build_vine_archway() -> Node3D:
 
 	return group
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GROUND COVER — tiny scatter pieces. These used to be built inline inside the
+#  map generator as loose Node3D + 5 MeshInstance3D per tuft, which is what
+#  produced ~84,000 mesh nodes on a single map. They are proper prop builders
+#  now so the baker can weld each one into a single instanced mesh.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+static func build_grass_tuft() -> Node3D: return _build_grass_tuft(false)
+static func build_flower_tuft() -> Node3D: return _build_grass_tuft(true)
+static func build_pebble() -> Node3D: return _build_pebble()
+static func build_dry_grass() -> Node3D: return _build_dry_grass()
+
+
+static func _build_grass_tuft(with_flower: bool) -> Node3D:
+	var group := Node3D.new()
+	group.name = "GroundCover_Grass"
+
+	var blade_mat := StandardMaterial3D.new()
+	blade_mat.albedo_color = Color(0.24, 0.50, 0.22)
+	blade_mat.roughness = 0.85
+
+	var blade_mat_dark := StandardMaterial3D.new()
+	blade_mat_dark.albedo_color = Color(0.17, 0.38, 0.16)
+	blade_mat_dark.roughness = 0.88
+
+	var blade_count := 6 + randi() % 3
+	for i in range(blade_count):
+		var blade := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		var height := 0.16 + randf() * 0.16
+		bm.size = Vector3(0.022 + randf() * 0.012, height, 0.010)
+		blade.mesh = bm
+		blade.material_override = blade_mat if i % 2 == 0 else blade_mat_dark
+		var ang := (float(i) / float(blade_count)) * TAU + randf() * 0.5
+		var rad := 0.03 + randf() * 0.06
+		blade.position = Vector3(cos(ang) * rad, height * 0.5, sin(ang) * rad)
+		# Splay outward so the tuft reads as a clump, not a bundle of posts.
+		blade.rotation = Vector3(
+			deg_to_rad(randf_range(-14.0, 14.0)),
+			ang,
+			deg_to_rad(randf_range(-14.0, 14.0)))
+		group.add_child(blade)
+
+	if with_flower:
+		var colors = [Color(0.92, 0.82, 0.20), Color(0.95, 0.95, 0.92),
+					  Color(0.75, 0.30, 0.85), Color(0.90, 0.42, 0.30)]
+		var petal_color: Color = colors[randi() % colors.size()]
+		var stem := MeshInstance3D.new()
+		var sm := CylinderMesh.new()
+		sm.top_radius = 0.008; sm.bottom_radius = 0.010; sm.height = 0.26; sm.radial_segments = 4
+		stem.mesh = sm
+		stem.material_override = blade_mat_dark
+		stem.position.y = 0.13
+		group.add_child(stem)
+
+		for p in range(5):
+			var petal := MeshInstance3D.new()
+			var pm := SphereMesh.new()
+			pm.radius = 0.030; pm.height = 0.026; pm.radial_segments = 5; pm.rings = 3
+			petal.mesh = pm
+			var pmat := StandardMaterial3D.new()
+			pmat.albedo_color = petal_color
+			pmat.roughness = 0.7
+			petal.material_override = pmat
+			var pa := (float(p) / 5.0) * TAU
+			petal.position = Vector3(cos(pa) * 0.035, 0.27, sin(pa) * 0.035)
+			group.add_child(petal)
+
+		var core := MeshInstance3D.new()
+		var cm := SphereMesh.new()
+		cm.radius = 0.022; cm.height = 0.022; cm.radial_segments = 5; cm.rings = 3
+		core.mesh = cm
+		var cmat := StandardMaterial3D.new()
+		cmat.albedo_color = Color(0.95, 0.78, 0.22)
+		cmat.roughness = 0.6
+		core.material_override = cmat
+		core.position.y = 0.285
+		group.add_child(core)
+
+	return group
+
+
+static func _build_dry_grass() -> Node3D:
+	var group := Node3D.new()
+	group.name = "GroundCover_DryGrass"
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.52, 0.46, 0.24)
+	mat.roughness = 0.92
+	for i in range(5):
+		var blade := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		var h := 0.12 + randf() * 0.14
+		bm.size = Vector3(0.020, h, 0.008)
+		blade.mesh = bm
+		blade.material_override = mat
+		var ang := (float(i) / 5.0) * TAU + randf() * 0.6
+		blade.position = Vector3(cos(ang) * 0.045, h * 0.5, sin(ang) * 0.045)
+		blade.rotation = Vector3(deg_to_rad(randf_range(-22.0, 22.0)), ang, deg_to_rad(randf_range(-22.0, 22.0)))
+		group.add_child(blade)
+	return group
+
+
+static func _build_pebble() -> Node3D:
+	var group := Node3D.new()
+	group.name = "GroundCover_Pebble"
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.48, 0.46, 0.42)
+	mat.roughness = 0.90
+	var count := 1 + randi() % 3
+	for i in range(count):
+		var stone := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.055 + randf() * 0.075
+		sm.height = sm.radius * 1.4
+		sm.radial_segments = 6
+		sm.rings = 3
+		stone.mesh = sm
+		stone.material_override = mat
+		stone.position = Vector3((randf() - 0.5) * 0.34, sm.height * 0.30, (randf() - 0.5) * 0.34)
+		stone.rotation = Vector3(randf() * 0.6, randf() * TAU, randf() * 0.6)
+		stone.scale = Vector3(1.0, 0.7 + randf() * 0.3, 1.0)
+		group.add_child(stone)
+	return group

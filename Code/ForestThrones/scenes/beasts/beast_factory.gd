@@ -1,12 +1,46 @@
 extends RefCounted
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  BEAST FACTORY — Production-Quality 3D Beasts
-#  Matches character_factory.gd quality: multi-part geometry, PBR materials,
-#  detailed anatomy, accessory layers, emission effects for evolved forms.
-# ═══════════════════════════════════════════════════════════════════════════════
+## ═══════════════════════════════════════════════════════════════════════════════
+##  BEAST FACTORY — the four GDD companion species, built entirely from code.
+##
+##  As with characters, the _build_* functions are the DESIGN and stay readable.
+##  What ships goes through ActorBaker.get_rig(), which welds each animated joint
+##  into a single mesh and applies the shared stylised material. A wolf drops
+##  from ~70 MeshInstance3D to 8, which is what makes wild packs plus eight
+##  squads' companions affordable in one match.
+## ═══════════════════════════════════════════════════════════════════════════════
 
+const ActorBaker = preload("res://scripts/render/actor_baker.gd")
+
+## The joints beast_animator.gd drives. These must survive baking.
+const BEAST_JOINTS := [
+	"Body", "Head", "Tail", "Wing_L", "Wing_R",
+	"LimbPivot_FL", "LimbPivot_FR", "LimbPivot_BL", "LimbPivot_BR",
+]
+
+const SHADOW_SIZE := {
+	"wolf": 1.45, "dire_wolf": 1.70,
+	"raven": 0.75, "storm_raven": 0.95,
+	"boar": 1.55, "war_boar": 1.80,
+	"stag": 1.65, "great_stag": 1.95,
+}
+
+
+## Ship-ready beast: welded joints, stylised material, soft ground shadow.
 static func build_beast(beast_type: String = "wolf", is_evolved: bool = false) -> Node3D:
+	var key := beast_type.to_lower()
+	if is_evolved:
+		key += "_evolved"
+	return ActorBaker.get_rig(
+		key,
+		func(): return build_raw(beast_type, is_evolved),
+		BEAST_JOINTS,
+		"actor",
+		SHADOW_SIZE.get(beast_type.to_lower(), 1.4))
+
+
+## Un-baked design output — for editing and preview only.
+static func build_raw(beast_type: String = "wolf", is_evolved: bool = false) -> Node3D:
 	match beast_type.to_lower():
 		"wolf", "dire_wolf":
 			return _build_wolf(is_evolved)
@@ -284,9 +318,6 @@ static func _build_wolf(is_evolved: bool) -> Node3D:
 			ember.position = Vector3(pos.x, 0.02, pos.z)
 			group.add_child(ember)
 
-	# ─── CONTACT SHADOW ──────────────────────────────────────────────────
-	group.add_child(_make_contact_shadow(1.4 * sf, 0.8 * sf))
-
 	return group
 
 
@@ -537,7 +568,6 @@ static func _build_raven(is_evolved: bool) -> Node3D:
 			arc.rotation = Vector3(randf() * PI, randf() * PI, randf() * PI)
 			group.add_child(arc)
 
-	group.add_child(_make_contact_shadow(0.6 * sf, 0.6 * sf))
 	return group
 
 
@@ -854,7 +884,6 @@ static func _build_boar(is_evolved: bool) -> Node3D:
 				spike.rotation.z = side * deg_to_rad(-45.0)
 				group.add_child(spike)
 
-	group.add_child(_make_contact_shadow(1.2 * sf, 0.8 * sf))
 	return group
 
 
@@ -1142,7 +1171,6 @@ static func _build_stag(is_evolved: bool) -> Node3D:
 			leaf.position = Vector3(cos(ang) * 0.50 * sf, 0.90 * sf + sin(ang * 2) * 0.15, sin(ang) * 0.50 * sf)
 			group.add_child(leaf)
 
-	group.add_child(_make_contact_shadow(1.3 * sf, 0.9 * sf))
 	return group
 
 
@@ -1264,15 +1292,17 @@ static func _make_stag_leg(sf: float, hide_mat: Material, hoof_mat: Material, po
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SHARED UTILITY — Contact Shadow
 # ═══════════════════════════════════════════════════════════════════════════════
-static func _make_contact_shadow(width: float, depth: float) -> MeshInstance3D:
-	var shadow := MeshInstance3D.new()
-	var shadow_mesh := PlaneMesh.new()
-	shadow_mesh.size = Vector2(width, depth)
-	shadow.mesh = shadow_mesh
-	var shadow_mat := StandardMaterial3D.new()
-	shadow_mat.albedo_color = Color(0, 0, 0, 0.35)
-	shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	shadow.material_override = shadow_mat
-	shadow.position.y = 0.02
-	shadow.name = "ContactShadow"
-	return shadow
+## REMOVED: _make_contact_shadow().
+##
+## It added a flat PlaneMesh with alpha 0.35 to each beast root as a fake
+## grounding shadow. Two things were wrong with it:
+##
+##   1. ActorBaker already gives every rig a GroundShadow quad with a dedicated
+##      soft-edged shader, so this was a second shadow on top of the real one.
+##   2. It was part of the raw node tree, so ActorBaker.bake() welded it INTO
+##      the body mesh. The baker groups surfaces by roughness and metallic and
+##      does not carry transparency across, so the quad came out opaque — a grey
+##      slab through every quadruped's torso, clearly visible in a render.
+##
+## If a beast ever needs a bigger shadow, pass a larger value through
+## SHADOW_SIZE instead of adding geometry.

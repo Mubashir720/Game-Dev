@@ -1,24 +1,46 @@
 [gd_resource type="Environment" format=3 uid="uid://c6ft_env_tres"]
 
+; Match environment.
+;
+; Fog is DEPTH mode, not exponential. Exponential fog starts fogging at the
+; camera, so the density needed to hide the 115-unit draw-distance cut also
+; washed out everything within 20 units of the player — the whole image went
+; pale mint. Depth fog stays completely clear out to fog_depth_begin and then
+; closes fully before the far plane, so the cut is still invisible but the
+; playfield keeps its full colour.
+;
+; SSAO is deliberately OFF — a full-screen depth pass costs more on mobile than
+; it returns on a flat-shaded stylised look. Contact shading comes from the
+; directional light and from colour baked into the geometry.
+
 [resource]
 background_mode = 1
-background_color = Color(0.086, 0.114, 0.153, 1)
+background_color = Color(0.29, 0.42, 0.40, 1)
 ambient_light_source = 2
-ambient_light_color = Color(0.623529, 0.721569, 0.85098, 1)
-ambient_light_energy = 0.75
+ambient_light_color = Color(0.50, 0.62, 0.78, 1)
+ambient_light_energy = 0.55
 reflected_light_source = 1
 tonemap_mode = 2
-tonemap_exposure = 1.10
-tonemap_white = 1.30
-ssao_enabled = true
-ssao_radius = 2.2
-ssao_intensity = 1.6
-ssao_power = 1.5
+tonemap_exposure = 0.85
+tonemap_white = 1.6
+ssao_enabled = false
+ssil_enabled = false
+sdfgi_enabled = false
 glow_enabled = true
-glow_intensity = 0.90
-glow_bloom = 0.18
+glow_intensity = 0.35
+glow_bloom = 0.0
+glow_hdr_threshold = 1.6
 glow_blend_mode = 0
 fog_enabled = true
-fog_light_color = Color(0.086, 0.114, 0.153, 1)
-fog_density = 0.006
-fog_sky_affect = 0.5
+fog_mode = 1
+fog_light_color = Color(0.31, 0.44, 0.42, 1)
+fog_light_energy = 1.0
+fog_depth_begin = 52.0
+fog_depth_end = 112.0
+fog_depth_curve = 1.5
+fog_sky_affect = 1.0
+fog_aerial_perspective = 0.0
+adjustment_enabled = true
+adjustment_brightness = 1.0
+adjustment_contrast = 1.05
+adjustment_saturation = 1.06

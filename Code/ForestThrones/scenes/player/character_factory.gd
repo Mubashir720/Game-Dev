@@ -1,6 +1,51 @@
 extends RefCounted
 
+## ═══════════════════════════════════════════════════════════════════════════════
+##  CHARACTER FACTORY — the 12 GDD archetypes, built entirely from code.
+##
+##  The create_*() functions below are the DESIGN of each character and stay
+##  hand-authored and readable. What ships is not the raw output though: every
+##  archetype goes through ActorBaker, which rebuilds the flat rig into a proper
+##  Root > Torso > Head hierarchy and welds ~60 MeshInstance3D nodes down to ~7.
+##
+##  That matters twice over. A 32-player match with raw rigs would be ~1,900 draw
+##  calls for characters alone; baked it is ~220, and only the handful on screen
+##  actually draw. And because the bake gives the head a real pivot with the face
+##  and crown INSIDE it, the animator can finally turn a head without leaving the
+##  eyes behind.
+##
+##  Use create_character_by_archetype() everywhere. create_*_raw() is only for
+##  editing/previewing a design.
+## ═══════════════════════════════════════════════════════════════════════════════
+
+const ActorBaker = preload("res://scripts/render/actor_baker.gd")
+
+const ARCHETYPE_IDS := [
+	"warlord", "regent", "beastlord",
+	"engineer", "witch", "herbalist",
+	"guardian", "berserker", "sapper",
+	"scout", "archer", "builder",
+]
+
+## Which role each archetype belongs to (GDD §4).
+const ARCHETYPE_ROLE := {
+	"warlord": Constants.Role.KING, "regent": Constants.Role.KING, "beastlord": Constants.Role.KING,
+	"engineer": Constants.Role.QUEEN, "witch": Constants.Role.QUEEN, "herbalist": Constants.Role.QUEEN,
+	"guardian": Constants.Role.SOLDIER_A, "berserker": Constants.Role.SOLDIER_A, "sapper": Constants.Role.SOLDIER_A,
+	"scout": Constants.Role.SOLDIER_B, "archer": Constants.Role.SOLDIER_B, "builder": Constants.Role.SOLDIER_B,
+}
+
+
+## Ship-ready character: rebuilt hierarchy, welded meshes, stylised material.
 static func create_character_by_archetype(archetype_id: String) -> Node3D:
+	var id := archetype_id.to_lower()
+	if not ARCHETYPE_IDS.has(id):
+		id = "warlord"
+	return ActorBaker.get_actor(id, func(): return create_raw(id))
+
+
+## The un-baked design output. Use for editing and inspection, not for spawning.
+static func create_raw(archetype_id: String) -> Node3D:
 	match archetype_id.to_lower():
 		"warlord":   return create_warlord()
 		"regent":    return create_regent()
@@ -14,216 +59,282 @@ static func create_character_by_archetype(archetype_id: String) -> Node3D:
 		"scout":     return create_scout()
 		"archer":    return create_archer()
 		"builder":   return create_builder()
-		_:          return create_warlord()
+		_:           return create_warlord()
+
 
 static func create_character(role: Constants.Role) -> Node3D:
+	return create_character_by_archetype(default_archetype_for(role))
+
+
+static func default_archetype_for(role: Constants.Role) -> String:
 	match role:
-		Constants.Role.KING:      return create_warlord()
-		Constants.Role.QUEEN:     return create_engineer()
-		Constants.Role.SOLDIER_A: return create_guardian()
-		Constants.Role.SOLDIER_B: return create_scout()
-	return create_warlord()
+		Constants.Role.KING:      return "warlord"
+		Constants.Role.QUEEN:     return "engineer"
+		Constants.Role.SOLDIER_A: return "guardian"
+		Constants.Role.SOLDIER_B: return "scout"
+	return "warlord"
+
+
+## All archetype ids available for a role — used by the character select screen.
+static func archetypes_for_role(role: Constants.Role) -> Array:
+	var out: Array = []
+	for id in ARCHETYPE_IDS:
+		if ARCHETYPE_ROLE[id] == role:
+			out.append(id)
+	return out
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  PREMIUM BASE RIG — Detailed multi-part character body
+#  BASE RIG — stylised hero anatomy.
+#
+#  The previous rig was a stack of unconnected boxes: a flat slab torso, arms
+#  floating in the air beside it with a visible gap at the shoulder, and a hand
+#  made of a box plus four cylinders that read as a blob at any real distance.
+#
+#  This version keeps the exact same body-space anchor points (head 2.12,
+#  shoulders 1.72, belt 0.88, ground 0.0) so all forty-odd accessory builders
+#  below still line up, but rebuilds the anatomy itself:
+#
+#    • Torso is three stacked tapered sections, squashed front-to-back, so it
+#      reads as a chest narrowing into a waist instead of a cardboard box.
+#    • Shoulder balls physically bridge torso and arm, so limbs are attached.
+#    • Hands are single rounded mittens. Four finger cylinders each were 90% of
+#      the hand's triangle count and invisible past two metres.
+#    • Legs get a hip joint, a knee, and a boot with a real toe.
+#    • The head gets a jaw, a hair cap and a proper brow line, which is what
+#      makes a character look like a character rather than a ball.
 # ═══════════════════════════════════════════════════════════════════════════════
 static func _make_base_rig(tunic_color: Color, skin_color: Color = Color(0.86, 0.72, 0.53), build: String = "medium") -> Dictionary:
 	var group := Node3D.new()
-	
-	# --- PBR Materials ---
+
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = tunic_color
 	mat.roughness = 0.72
-	
+
+	var tunic_dark := StandardMaterial3D.new()
+	tunic_dark.albedo_color = tunic_color.darkened(0.22)
+	tunic_dark.roughness = 0.75
+
 	var skin_mat := StandardMaterial3D.new()
 	skin_mat.albedo_color = skin_color
 	skin_mat.roughness = 0.55
-	
+
+	var skin_shade := StandardMaterial3D.new()
+	skin_shade.albedo_color = skin_color.darkened(0.14)
+	skin_shade.roughness = 0.58
+
 	var dark_mat := StandardMaterial3D.new()
-	dark_mat.albedo_color = Color(0.12, 0.12, 0.14)
+	dark_mat.albedo_color = Color(0.14, 0.14, 0.17)
 	dark_mat.roughness = 0.80
-	
+
 	var boot_mat := StandardMaterial3D.new()
-	boot_mat.albedo_color = Color(0.22, 0.16, 0.12)
+	boot_mat.albedo_color = Color(0.24, 0.17, 0.12)
 	boot_mat.roughness = 0.85
-	
-	# --- Build Proportions ---
-	var torso_w := 0.85; var torso_h := 0.95; var torso_d := 0.48
-	var shoulder_w := 0.0; var leg_len := 0.85; var arm_len := 0.72
+
+	var hair_mat := StandardMaterial3D.new()
+	hair_mat.albedo_color = Color(0.26, 0.17, 0.10)
+	hair_mat.roughness = 0.88
+
+	# ── Build proportions ────────────────────────────────────────────────────
+	var chest_r := 0.42
+	var waist_r := 0.30
+	var torso_squash := 0.60      # front-to-back flattening; humans aren't round
+	## Half the shoulder span. The arm pivot MUST clear chest_r or the whole arm
+	## renders inside the ribcage — which is exactly what happened before, and
+	## why the characters looked armless. These values also match the fixed x
+	## positions the pauldron / spiked-shoulder accessories were authored to.
+	var arm_x := 0.51
+	var leg_len := 0.85
+	var arm_len := 0.72
+	var limb_r := 0.135
 	match build:
 		"heavy":
-			torso_w = 1.0; torso_h = 1.0; torso_d = 0.55; shoulder_w = 0.10
-			leg_len = 0.90; arm_len = 0.78
+			chest_r = 0.50; waist_r = 0.36; arm_x = 0.63
+			leg_len = 0.88; arm_len = 0.78; limb_r = 0.155; torso_squash = 0.64
 		"slim":
-			torso_w = 0.72; torso_h = 0.90; torso_d = 0.40
-			leg_len = 0.82; arm_len = 0.68
-	
-	# ─── TORSO (Tapered box — wider at shoulders) ─────────────────────────────
-	var torso := MeshInstance3D.new()
-	var torso_mesh := BoxMesh.new()
-	torso_mesh.size = Vector3(torso_w, torso_h, torso_d)
-	torso.mesh = torso_mesh
-	torso.material_override = mat
-	torso.position.y = 1.32
-	torso.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			chest_r = 0.36; waist_r = 0.26; arm_x = 0.45
+			leg_len = 0.86; arm_len = 0.70; limb_r = 0.118; torso_squash = 0.56
+
+	# ── TORSO — three tapered sections, squashed front-to-back ───────────────
+	var torso := _seg(chest_r, chest_r * 0.94, 0.34, mat, Vector3(0, 1.56, 0))
+	torso.scale = Vector3(1.0, 1.0, torso_squash)
+	torso.name = "TorsoCore"
 	group.add_child(torso)
-	
-	# ─── BELT ─────────────────────────────────────────────────────────────────
-	var belt := MeshInstance3D.new()
-	var belt_mesh := BoxMesh.new()
-	belt_mesh.size = Vector3(torso_w + 0.04, 0.10, torso_d + 0.04)
-	belt.mesh = belt_mesh
-	var belt_mat := StandardMaterial3D.new()
-	belt_mat.albedo_color = Color(0.28, 0.20, 0.14)
-	belt_mat.roughness = 0.80
-	belt.material_override = belt_mat
-	belt.position.y = 0.88
-	belt.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+	var ribs := _seg(chest_r * 0.94, waist_r * 1.06, 0.34, mat, Vector3(0, 1.24, 0))
+	ribs.scale = Vector3(1.0, 1.0, torso_squash)
+	group.add_child(ribs)
+
+	var waist := _seg(waist_r * 1.06, waist_r, 0.22, tunic_dark, Vector3(0, 1.00, 0))
+	waist.scale = Vector3(1.0, 1.0, torso_squash + 0.04)
+	group.add_child(waist)
+
+	# Chest highlight panel — a lighter facing plane gives the flat-shaded torso
+	# a readable front, which matters a lot on an isometric camera.
+	var chest_panel := MeshInstance3D.new()
+	var cp := BoxMesh.new()
+	cp.size = Vector3(chest_r * 1.15, 0.46, 0.04)
+	chest_panel.mesh = cp
+	var panel_mat := StandardMaterial3D.new()
+	panel_mat.albedo_color = tunic_color.lightened(0.10)
+	panel_mat.roughness = 0.72
+	chest_panel.material_override = panel_mat
+	chest_panel.position = Vector3(0, 1.48, chest_r * torso_squash - 0.01)
+	group.add_child(chest_panel)
+
+	# ── PELVIS + BELT ────────────────────────────────────────────────────────
+	var pelvis := _seg(waist_r, waist_r * 1.02, 0.20, dark_mat, Vector3(0, 0.82, 0))
+	pelvis.scale = Vector3(1.0, 1.0, torso_squash + 0.06)
+	group.add_child(pelvis)
+
+	var belt := _seg(waist_r * 1.10, waist_r * 1.10, 0.11, _quick_mat(Color(0.28, 0.20, 0.14), 0.80), Vector3(0, 0.92, 0))
+	belt.scale = Vector3(1.0, 1.0, torso_squash + 0.06)
 	group.add_child(belt)
-	
-	# Belt buckle
+
 	var buckle := MeshInstance3D.new()
-	var buckle_mesh := BoxMesh.new()
-	buckle_mesh.size = Vector3(0.10, 0.08, 0.04)
-	buckle.mesh = buckle_mesh
-	var buckle_mat := StandardMaterial3D.new()
-	buckle_mat.albedo_color = Color(0.83, 0.69, 0.22)
-	buckle_mat.metallic = 0.85
-	buckle.material_override = buckle_mat
-	buckle.position = Vector3(0, 0.88, torso_d / 2.0 + 0.02)
+	var bm := BoxMesh.new(); bm.size = Vector3(0.13, 0.10, 0.05)
+	buckle.mesh = bm
+	buckle.material_override = _quick_mat(Color(0.85, 0.71, 0.26), 0.30, 0.85)
+	buckle.position = Vector3(0, 0.92, waist_r * (torso_squash + 0.06) + 0.01)
 	group.add_child(buckle)
-	
-	# ─── HEAD (Rounded sphere with jaw) ───────────────────────────────────────
+
+	# ── SHOULDER BALLS — bridge torso and arms so limbs are attached ─────────
+	for side in [-1.0, 1.0]:
+		var ball := MeshInstance3D.new()
+		var bs := SphereMesh.new()
+		bs.radius = limb_r * 1.45; bs.height = limb_r * 2.9
+		bs.radial_segments = 10; bs.rings = 6
+		ball.mesh = bs
+		ball.material_override = mat
+		ball.position = Vector3(side * arm_x, 1.70, 0)
+		group.add_child(ball)
+
+	# Trapezius wedge — bridges the neck to the shoulder balls so the upper body
+	# reads as one shape instead of a torso with two balls floating beside it.
+	var traps := MeshInstance3D.new()
+	var trm := SphereMesh.new()
+	trm.radius = 0.5; trm.height = 1.0
+	trm.radial_segments = 12; trm.rings = 6
+	traps.mesh = trm
+	traps.material_override = mat
+	traps.position = Vector3(0, 1.66, 0)
+	traps.scale = Vector3(arm_x * 1.90, 0.42, chest_r * torso_squash * 1.75)
+	group.add_child(traps)
+
+	# ── NECK & HEAD ──────────────────────────────────────────────────────────
+	var neck := _seg(0.145, 0.185, 0.20, skin_shade, Vector3(0, 1.84, 0))
+	group.add_child(neck)
+
 	var head := MeshInstance3D.new()
 	var head_mesh := SphereMesh.new()
-	head_mesh.radius = 0.34
-	head_mesh.height = 0.72
-	head_mesh.radial_segments = 16
-	head_mesh.rings = 12
+	head_mesh.radius = 0.345
+	head_mesh.height = 0.70
+	head_mesh.radial_segments = 14
+	head_mesh.rings = 8
 	head.mesh = head_mesh
 	head.material_override = skin_mat
 	head.position.y = 2.12
-	head.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	head.name = "HeadCore"
 	group.add_child(head)
-	
-	# Neck
-	var neck := MeshInstance3D.new()
-	var neck_mesh := CylinderMesh.new()
-	neck_mesh.top_radius = 0.14
-	neck_mesh.bottom_radius = 0.18
-	neck_mesh.height = 0.16
-	neck.mesh = neck_mesh
-	neck.material_override = skin_mat
-	neck.position.y = 1.82
-	group.add_child(neck)
-	
-	# ─── EYES (White sclera + dark iris + specular pupil) ─────────────────────
-	var eye_white_mat := StandardMaterial3D.new()
-	eye_white_mat.albedo_color = Color(0.95, 0.95, 0.95)
-	var iris_mat := StandardMaterial3D.new()
-	iris_mat.albedo_color = Color(0.20, 0.35, 0.55)
-	var pupil_mat := StandardMaterial3D.new()
-	pupil_mat.albedo_color = Color(0.02, 0.02, 0.02)
-	
-	for side in [-1, 1]:
-		# Sclera
+
+	# Jaw — a slightly narrower box under the skull. Turns a ball into a face.
+	var jaw := MeshInstance3D.new()
+	var jm := BoxMesh.new(); jm.size = Vector3(0.44, 0.20, 0.42)
+	jaw.mesh = jm
+	jaw.material_override = skin_mat
+	jaw.position = Vector3(0, 1.98, 0.02)
+	group.add_child(jaw)
+
+	# Hair cap — covers the crown so hats and crowns sit on hair, not on scalp.
+	var hair := MeshInstance3D.new()
+	var hm2 := SphereMesh.new()
+	hm2.radius = 0.355; hm2.height = 0.62
+	hm2.radial_segments = 14; hm2.rings = 7
+	hair.mesh = hm2
+	hair.material_override = hair_mat
+	hair.position = Vector3(0, 2.20, -0.02)
+	hair.scale = Vector3(1.0, 0.72, 1.0)
+	group.add_child(hair)
+
+	# ── FACE ─────────────────────────────────────────────────────────────────
+	var eye_white := _quick_mat(Color(0.96, 0.96, 0.97), 0.35)
+	var iris_mat := _quick_mat(Color(0.16, 0.30, 0.50), 0.30)
+	var pupil_mat := _quick_mat(Color(0.03, 0.03, 0.04), 0.25)
+	var brow_mat := _quick_mat(Color(0.20, 0.14, 0.10), 0.90)
+
+	for side2 in [-1.0, 1.0]:
 		var sclera := MeshInstance3D.new()
-		var sclera_m := SphereMesh.new()
-		sclera_m.radius = 0.055; sclera_m.height = 0.07
-		sclera.mesh = sclera_m
-		sclera.material_override = eye_white_mat
-		sclera.position = Vector3(side * 0.12, 2.16, 0.30)
+		var sm2 := SphereMesh.new(); sm2.radius = 0.072; sm2.height = 0.10
+		sm2.radial_segments = 8; sm2.rings = 5
+		sclera.mesh = sm2
+		sclera.material_override = eye_white
+		sclera.position = Vector3(side2 * 0.135, 2.15, 0.275)
+		sclera.scale = Vector3(1.0, 1.15, 0.55)
 		group.add_child(sclera)
-		# Iris
+
 		var iris := MeshInstance3D.new()
-		var iris_m := SphereMesh.new()
-		iris_m.radius = 0.035; iris_m.height = 0.04
-		iris.mesh = iris_m
+		var im := SphereMesh.new(); im.radius = 0.042; im.height = 0.05
+		im.radial_segments = 8; im.rings = 4
+		iris.mesh = im
 		iris.material_override = iris_mat
-		iris.position = Vector3(side * 0.12, 2.16, 0.335)
+		iris.position = Vector3(side2 * 0.135, 2.14, 0.318)
 		group.add_child(iris)
-		# Pupil
+
 		var pupil := MeshInstance3D.new()
-		var pupil_m := SphereMesh.new()
-		pupil_m.radius = 0.018; pupil_m.height = 0.02
-		pupil.mesh = pupil_m
+		var pm2 := SphereMesh.new(); pm2.radius = 0.021; pm2.height = 0.026
+		pm2.radial_segments = 6; pm2.rings = 3
+		pupil.mesh = pm2
 		pupil.material_override = pupil_mat
-		pupil.position = Vector3(side * 0.12, 2.16, 0.355)
+		pupil.position = Vector3(side2 * 0.135, 2.14, 0.338)
 		group.add_child(pupil)
-	
-	# Eyebrows
-	var brow_mat := StandardMaterial3D.new()
-	brow_mat.albedo_color = Color(0.18, 0.14, 0.12)
-	for side in [-1, 1]:
+
 		var brow := MeshInstance3D.new()
-		var brow_m := BoxMesh.new()
-		brow_m.size = Vector3(0.11, 0.025, 0.03)
-		brow.mesh = brow_m
+		var brm := BoxMesh.new(); brm.size = Vector3(0.14, 0.035, 0.05)
+		brow.mesh = brm
 		brow.material_override = brow_mat
-		brow.position = Vector3(side * 0.12, 2.23, 0.31)
-		brow.rotation.z = side * deg_to_rad(-8.0)
+		brow.position = Vector3(side2 * 0.135, 2.255, 0.295)
+		brow.rotation.z = side2 * deg_to_rad(-9.0)
 		group.add_child(brow)
-	
-	# Nose
+
 	var nose := MeshInstance3D.new()
-	var nose_m := CylinderMesh.new()
-	nose_m.top_radius = 0.02; nose_m.bottom_radius = 0.035; nose_m.height = 0.08
-	nose.mesh = nose_m
-	nose.material_override = skin_mat
-	nose.position = Vector3(0, 2.10, 0.35)
-	nose.rotation.x = deg_to_rad(-15.0)
+	var nm := PrismMesh.new(); nm.size = Vector3(0.07, 0.11, 0.09)
+	nose.mesh = nm
+	nose.material_override = skin_shade
+	nose.position = Vector3(0, 2.055, 0.31)
+	nose.rotation.x = deg_to_rad(90.0)
 	group.add_child(nose)
-	
-	# Mouth
+
 	var mouth := MeshInstance3D.new()
-	var mouth_m := BoxMesh.new()
-	mouth_m.size = Vector3(0.12, 0.02, 0.015)
-	mouth.mesh = mouth_m
-	var mouth_mat := StandardMaterial3D.new()
-	mouth_mat.albedo_color = Color(0.55, 0.30, 0.28)
-	mouth.material_override = mouth_mat
-	mouth.position = Vector3(0, 2.02, 0.33)
+	var mm := BoxMesh.new(); mm.size = Vector3(0.15, 0.030, 0.02)
+	mouth.mesh = mm
+	mouth.material_override = _quick_mat(Color(0.50, 0.26, 0.24), 0.60)
+	mouth.position = Vector3(0, 1.965, 0.315)
 	group.add_child(mouth)
-	
-	# Ears
-	for side in [-1, 1]:
+
+	for side3 in [-1.0, 1.0]:
 		var ear := MeshInstance3D.new()
-		var ear_m := SphereMesh.new()
-		ear_m.radius = 0.06; ear_m.height = 0.09
-		ear.mesh = ear_m
+		var em := SphereMesh.new(); em.radius = 0.075; em.height = 0.12
+		em.radial_segments = 8; em.rings = 4
+		ear.mesh = em
 		ear.material_override = skin_mat
-		ear.position = Vector3(side * 0.33, 2.10, 0.04)
-		ear.scale = Vector3(0.5, 1.0, 0.8)
+		ear.position = Vector3(side3 * 0.335, 2.10, 0.02)
+		ear.scale = Vector3(0.45, 1.0, 0.85)
 		group.add_child(ear)
-	
-	# ─── ARMS (Upper arm + forearm + hand) ────────────────────────────────────
-	var left_arm := _make_detailed_arm(arm_len, mat, skin_mat, Vector3(-torso_w / 2.0 - 0.08 - shoulder_w, 1.72, 0), false)
+
+	# ── LIMBS ────────────────────────────────────────────────────────────────
+	var left_arm := _make_detailed_arm(arm_len, mat, skin_mat, Vector3(-arm_x, 1.70, 0), false, limb_r)
 	left_arm.name = "LimbPivot_LA"
-	var right_arm := _make_detailed_arm(arm_len, mat, skin_mat, Vector3(torso_w / 2.0 + 0.08 + shoulder_w, 1.72, 0), true)
+	var right_arm := _make_detailed_arm(arm_len, mat, skin_mat, Vector3(arm_x, 1.70, 0), true, limb_r)
 	right_arm.name = "LimbPivot_RA"
 	group.add_child(left_arm)
 	group.add_child(right_arm)
-	
-	# ─── LEGS (Thigh + shin + boot) ──────────────────────────────────────────
-	var left_leg := _make_detailed_leg(leg_len, dark_mat, boot_mat, Vector3(-0.20, 0.85, 0))
+
+	var left_leg := _make_detailed_leg(leg_len, dark_mat, boot_mat, Vector3(-waist_r * 0.55, 0.85, 0), limb_r)
 	left_leg.name = "LimbPivot_LL"
-	var right_leg := _make_detailed_leg(leg_len, dark_mat, boot_mat, Vector3(0.20, 0.85, 0))
+	var right_leg := _make_detailed_leg(leg_len, dark_mat, boot_mat, Vector3(waist_r * 0.55, 0.85, 0), limb_r)
 	right_leg.name = "LimbPivot_RL"
 	group.add_child(left_leg)
 	group.add_child(right_leg)
-	
-	# ─── CONTACT SHADOW ──────────────────────────────────────────────────────
-	var shadow := MeshInstance3D.new()
-	var shadow_mesh := PlaneMesh.new()
-	shadow_mesh.size = Vector2(1.15, 1.15)
-	shadow.mesh = shadow_mesh
-	var shadow_mat := StandardMaterial3D.new()
-	shadow_mat.albedo_color = Color(0, 0, 0, 0.4)
-	shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	shadow.material_override = shadow_mat
-	shadow.position.y = 0.02
-	group.add_child(shadow)
-	
+
 	return {
 		"root": group,
 		"head": head,
@@ -232,135 +343,129 @@ static func _make_base_rig(tunic_color: Color, skin_color: Color = Color(0.86, 0
 		"right_arm": right_arm,
 	}
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  DETAILED ARM — Upper arm + forearm + hand with fingers
-# ═══════════════════════════════════════════════════════════════════════════════
-static func _make_detailed_arm(total_len: float, sleeve_mat: Material, skin_mat: Material, pos: Vector3, is_right: bool) -> Node3D:
-	var pivot := Node3D.new()
-	pivot.position = pos
-	
-	# Upper arm (sleeved)
-	var upper := MeshInstance3D.new()
-	var upper_m := CylinderMesh.new()
-	upper_m.top_radius = 0.13; upper_m.bottom_radius = 0.11
-	upper_m.height = total_len * 0.55
-	upper.mesh = upper_m
-	upper.material_override = sleeve_mat
-	upper.position.y = -total_len * 0.28
-	upper.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	pivot.add_child(upper)
-	
-	# Forearm (skin)
-	var forearm := MeshInstance3D.new()
-	var fore_m := CylinderMesh.new()
-	fore_m.top_radius = 0.10; fore_m.bottom_radius = 0.08
-	fore_m.height = total_len * 0.45
-	forearm.mesh = fore_m
-	forearm.material_override = skin_mat
-	forearm.position.y = -total_len * 0.72
-	forearm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	pivot.add_child(forearm)
-	
-	# Hand (box with rounded feel)
-	var hand := MeshInstance3D.new()
-	var hand_m := BoxMesh.new()
-	hand_m.size = Vector3(0.12, 0.08, 0.10)
-	hand.mesh = hand_m
-	hand.material_override = skin_mat
-	hand.position.y = -total_len - 0.02
-	hand.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	pivot.add_child(hand)
-	
-	# Fingers (3 small cylinders)
-	for fi in range(3):
-		var finger := MeshInstance3D.new()
-		var finger_m := CylinderMesh.new()
-		finger_m.top_radius = 0.015; finger_m.bottom_radius = 0.013
-		finger_m.height = 0.08
-		finger.mesh = finger_m
-		finger.material_override = skin_mat
-		var fx = -0.03 + fi * 0.03
-		finger.position = Vector3(fx, -total_len - 0.08, 0.025)
-		pivot.add_child(finger)
-	
-	# Thumb
-	var thumb := MeshInstance3D.new()
-	var thumb_m := CylinderMesh.new()
-	thumb_m.top_radius = 0.018; thumb_m.bottom_radius = 0.015
-	thumb_m.height = 0.06
-	thumb.mesh = thumb_m
-	thumb.material_override = skin_mat
-	var tx = 0.06 if is_right else -0.06
-	thumb.position = Vector3(tx, -total_len - 0.02, 0.04)
-	thumb.rotation.z = deg_to_rad(30.0) * (1 if is_right else -1)
-	pivot.add_child(thumb)
-	
-	return pivot
+
+## Tapered 10-sided section — the building block of every rounded body part.
+static func _seg(top_r: float, bottom_r: float, height: float, m: Material, pos: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var c := CylinderMesh.new()
+	c.top_radius = top_r
+	c.bottom_radius = bottom_r
+	c.height = height
+	c.radial_segments = 10
+	c.rings = 1
+	mi.mesh = c
+	mi.material_override = m
+	mi.position = pos
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	return mi
+
+
+static func _quick_mat(c: Color, rough: float = 0.8, metal: float = 0.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = rough
+	m.metallic = metal
+	return m
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  DETAILED LEG — Thigh + shin + boot with sole
+#  ARM — shoulder ball, tapered upper arm, forearm, rounded mitten hand.
 # ═══════════════════════════════════════════════════════════════════════════════
-static func _make_detailed_leg(total_len: float, pants_mat: Material, boot_mat: Material, pos: Vector3) -> Node3D:
+static func _make_detailed_arm(total_len: float, sleeve_mat: Material, skin_mat: Material,
+		pos: Vector3, is_right: bool, r: float = 0.135) -> Node3D:
 	var pivot := Node3D.new()
 	pivot.position = pos
-	
-	# Thigh
-	var thigh := MeshInstance3D.new()
-	var thigh_m := CylinderMesh.new()
-	thigh_m.top_radius = 0.16; thigh_m.bottom_radius = 0.13
-	thigh_m.height = total_len * 0.50
-	thigh.mesh = thigh_m
-	thigh.material_override = pants_mat
-	thigh.position.y = -total_len * 0.25
-	thigh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	pivot.add_child(thigh)
-	
-	# Shin
-	var shin := MeshInstance3D.new()
-	var shin_m := CylinderMesh.new()
-	shin_m.top_radius = 0.12; shin_m.bottom_radius = 0.10
-	shin_m.height = total_len * 0.40
-	shin.mesh = shin_m
-	shin.material_override = pants_mat
-	shin.position.y = -total_len * 0.68
-	shin.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	pivot.add_child(shin)
-	
-	# Boot (tapered cylinder + sole box)
-	var boot := MeshInstance3D.new()
-	var boot_m := CylinderMesh.new()
-	boot_m.top_radius = 0.12; boot_m.bottom_radius = 0.11
-	boot_m.height = total_len * 0.22
-	boot.mesh = boot_m
-	boot.material_override = boot_mat
-	boot.position.y = -total_len * 0.88
-	boot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	pivot.add_child(boot)
-	
-	# Boot sole (flat box extending forward)
-	var sole := MeshInstance3D.new()
-	var sole_m := BoxMesh.new()
-	sole_m.size = Vector3(0.22, 0.04, 0.28)
-	sole.mesh = sole_m
-	var sole_mat := StandardMaterial3D.new()
-	sole_mat.albedo_color = Color(0.10, 0.08, 0.06)
-	sole.material_override = sole_mat
-	sole.position = Vector3(0, -total_len + 0.02, 0.04)
-	sole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	pivot.add_child(sole)
-	
-	# Boot strap detail
-	var strap := MeshInstance3D.new()
-	var strap_m := BoxMesh.new()
-	strap_m.size = Vector3(0.26, 0.03, 0.24)
-	strap.mesh = strap_m
-	var strap_mat := StandardMaterial3D.new()
-	strap_mat.albedo_color = Color(0.30, 0.22, 0.16)
-	strap.material_override = strap_mat
-	strap.position.y = -total_len * 0.82
-	pivot.add_child(strap)
-	
+
+	var upper := _seg(r, r * 0.86, total_len * 0.52, sleeve_mat, Vector3(0, -total_len * 0.26, 0))
+	pivot.add_child(upper)
+
+	# Elbow ball — stops the arm reading as one straight tube when it bends.
+	var elbow := MeshInstance3D.new()
+	var em := SphereMesh.new(); em.radius = r * 0.88; em.height = r * 1.76
+	em.radial_segments = 8; em.rings = 5
+	elbow.mesh = em
+	elbow.material_override = sleeve_mat
+	elbow.position.y = -total_len * 0.52
+	pivot.add_child(elbow)
+
+	var fore := _seg(r * 0.84, r * 0.70, total_len * 0.44, skin_mat, Vector3(0, -total_len * 0.74, 0))
+	pivot.add_child(fore)
+
+	# Mitten hand. Four finger cylinders each used to cost more triangles than
+	# the entire forearm and were invisible past two metres.
+	var hand := MeshInstance3D.new()
+	var hm := SphereMesh.new()
+	hm.radius = r * 0.92; hm.height = r * 2.0
+	hm.radial_segments = 8; hm.rings = 5
+	hand.mesh = hm
+	hand.material_override = skin_mat
+	hand.position.y = -total_len - r * 0.35
+	hand.scale = Vector3(0.85, 1.0, 1.15)
+	hand.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	pivot.add_child(hand)
+
+	var thumb := MeshInstance3D.new()
+	var tm := SphereMesh.new(); tm.radius = r * 0.36; tm.height = r * 0.9
+	tm.radial_segments = 6; tm.rings = 3
+	thumb.mesh = tm
+	thumb.material_override = skin_mat
+	thumb.position = Vector3((r * 0.75) * (1.0 if is_right else -1.0), -total_len - r * 0.15, r * 0.30)
+	pivot.add_child(thumb)
+
 	return pivot
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LEG — hip, thigh, knee, shin, boot with a real toe.
+# ═══════════════════════════════════════════════════════════════════════════════
+static func _make_detailed_leg(total_len: float, pants_mat: Material, boot_mat: Material,
+		pos: Vector3, r: float = 0.135) -> Node3D:
+	var pivot := Node3D.new()
+	pivot.position = pos
+
+	var hip := MeshInstance3D.new()
+	var hm := SphereMesh.new(); hm.radius = r * 1.25; hm.height = r * 2.4
+	hm.radial_segments = 8; hm.rings = 5
+	hip.mesh = hm
+	hip.material_override = pants_mat
+	hip.position.y = -0.02
+	pivot.add_child(hip)
+
+	var thigh := _seg(r * 1.20, r * 1.00, total_len * 0.46, pants_mat, Vector3(0, -total_len * 0.25, 0))
+	pivot.add_child(thigh)
+
+	var knee := MeshInstance3D.new()
+	var km := SphereMesh.new(); km.radius = r * 1.0; km.height = r * 2.0
+	km.radial_segments = 8; km.rings = 5
+	knee.mesh = km
+	knee.material_override = pants_mat
+	knee.position.y = -total_len * 0.48
+	pivot.add_child(knee)
+
+	var shin := _seg(r * 0.98, r * 0.85, total_len * 0.36, pants_mat, Vector3(0, -total_len * 0.67, 0))
+	pivot.add_child(shin)
+
+	# Boot: chunky ankle + a toe box that gives the silhouette a real footprint.
+	var boot := _seg(r * 1.05, r * 1.15, total_len * 0.20, boot_mat, Vector3(0, -total_len * 0.90, 0))
+	pivot.add_child(boot)
+
+	var toe := MeshInstance3D.new()
+	var tm := BoxMesh.new(); tm.size = Vector3(r * 2.1, r * 0.75, r * 2.5)
+	toe.mesh = tm
+	toe.material_override = boot_mat
+	toe.position = Vector3(0, -total_len + r * 0.30, r * 0.85)
+	toe.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	pivot.add_child(toe)
+
+	var sole := MeshInstance3D.new()
+	var sm := BoxMesh.new(); sm.size = Vector3(r * 2.25, r * 0.28, r * 3.0)
+	sole.mesh = sm
+	sole.material_override = _quick_mat(Color(0.11, 0.09, 0.07), 0.95)
+	sole.position = Vector3(0, -total_len + r * 0.02, r * 0.55)
+	pivot.add_child(sole)
+
+	return pivot
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  KING ARCHETYPES
@@ -583,74 +688,85 @@ static func _make_horned_crown() -> Node3D:
 		group.add_child(horn)
 	return group
 
+## Cape — a curved shell that wraps the shoulders and flares out at the hem.
+## The old version was four flat boxes wider than the character, which read as
+## rectangular wings sticking out either side rather than cloth.
 static func _make_cape(color: Color) -> Node3D:
 	var group := Node3D.new()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = 0.75
-	var gold_mat := StandardMaterial3D.new()
-	gold_mat.albedo_color = Color(0.83, 0.69, 0.22)
-	gold_mat.metallic = 0.85
-	# Gold clasp bar across shoulders
+	var gold_mat := _quick_mat(Color(0.85, 0.71, 0.26), 0.28, 0.85)
+
 	var clasp := MeshInstance3D.new()
-	var cbox := BoxMesh.new()
-	cbox.size = Vector3(0.88, 0.07, 0.12)
+	var cbox := BoxMesh.new(); cbox.size = Vector3(0.46, 0.07, 0.14)
 	clasp.mesh = cbox; clasp.material_override = gold_mat
-	clasp.position = Vector3(0, 1.82, -0.18)
+	clasp.position = Vector3(0, 1.80, -0.10)
 	group.add_child(clasp)
-	# Clasp gem center
+
 	var gem := MeshInstance3D.new()
 	var gem_m := SphereMesh.new()
-	gem_m.radius = 0.04; gem_m.height = 0.05
+	gem_m.radius = 0.05; gem_m.height = 0.06
+	gem_m.radial_segments = 8; gem_m.rings = 4
 	gem.mesh = gem_m
 	var gem_mat := StandardMaterial3D.new()
-	gem_mat.albedo_color = Color(0.15, 0.55, 0.85)
+	gem_mat.albedo_color = Color(0.18, 0.58, 0.88)
 	gem_mat.emission_enabled = true
-	gem_mat.emission = Color(0.15, 0.55, 0.85)
+	gem_mat.emission = Color(0.18, 0.58, 0.88)
+	gem_mat.emission_energy_multiplier = 1.2
 	gem.material_override = gem_mat
-	gem.position = Vector3(0, 1.82, -0.10)
+	gem.position = Vector3(0, 1.80, -0.02)
 	group.add_child(gem)
-	# Cape: 4 layered box segments that naturally drape down the back
-	var cape_widths = [0.82, 0.78, 0.72, 0.65]
-	var cape_heights = [0.32, 0.32, 0.30, 0.28]
-	var y_start := 1.68
-	for i in range(cape_widths.size()):
-		var seg := MeshInstance3D.new()
-		var seg_m := BoxMesh.new()
-		seg_m.size = Vector3(cape_widths[i], cape_heights[i], 0.06)
-		seg.mesh = seg_m
-		# Slightly darken lower segments for depth
-		var seg_mat := StandardMaterial3D.new()
-		seg_mat.albedo_color = color.darkened(i * 0.06)
-		seg_mat.roughness = 0.75
-		seg.material_override = seg_mat
-		seg.position = Vector3(0, y_start - i * cape_heights[i], -0.28 - i * 0.02)
-		seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		group.add_child(seg)
+
+	_build_cloth_shell(group, color, 1.74, 0.62, 0.36, 0.58, 7, -0.20)
 	return group
 
+
+## Cloak — same wrapping shell, longer and without the clasp.
 static func _make_cloak(color: Color) -> Node3D:
 	var group := Node3D.new()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = 0.80
-	# Cloak: 5 layered box segments wrapping behind the body
-	var widths = [0.90, 0.88, 0.85, 0.80, 0.72]
-	var heights = [0.28, 0.28, 0.26, 0.26, 0.24]
-	var y_start := 1.72
-	for i in range(widths.size()):
-		var seg := MeshInstance3D.new()
-		var seg_m := BoxMesh.new()
-		seg_m.size = Vector3(widths[i], heights[i], 0.05)
-		seg.mesh = seg_m
-		var seg_mat := StandardMaterial3D.new()
-		seg_mat.albedo_color = color.darkened(i * 0.04)
-		seg_mat.roughness = 0.80
-		seg.material_override = seg_mat
-		seg.position = Vector3(0, y_start - i * heights[i], -0.26 - i * 0.015)
-		seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		group.add_child(seg)
+	_build_cloth_shell(group, color, 1.76, 0.70, 0.40, 0.62, 8, -0.18)
 	return group
+
+
+## Shared cloth builder. Lays a ring of narrow panels around the BACK of the
+## body, each angled outward and getting wider toward the hem, so the result
+## reads as fabric hanging off the shoulders and flaring at the bottom.
+##   y_top       — shoulder height the cloth hangs from
+##   length      — how far it falls
+##   top_spread  — half-width at the shoulders
+##   hem_spread  — half-width at the hem (larger = more flare)
+##   panels      — horizontal resolution across the back
+##   z_offset    — how far behind the spine the cloth sits
+static func _build_cloth_shell(group: Node3D, color: Color, y_top: float, length: float,
+		top_spread: float, hem_spread: float, panels: int, z_offset: float) -> void:
+	var rows := 4
+	for row in range(rows):
+		var t0: float = float(row) / float(rows)
+		var t1: float = float(row + 1) / float(rows)
+		var y0: float = y_top - length * t0
+		var y1: float = y_top - length * t1
+		var spread0: float = lerp(top_spread, hem_spread, t0 * t0)
+		var spread1: float = lerp(top_spread, hem_spread, t1 * t1)
+		var row_mat := _quick_mat(color.darkened(t0 * 0.16), 0.78)
+
+		for i in range(panels):
+			var u: float = (float(i) + 0.5) / float(panels) - 0.5     # -0.5 .. 0.5
+			# Wrap the panels around an arc so the cloth curves around the body.
+			var ang: float = u * PI * 0.92
+			var seg := MeshInstance3D.new()
+			var sm := BoxMesh.new()
+			var w: float = (spread1 * 2.0) / float(panels) * 1.25
+			sm.size = Vector3(w, abs(y0 - y1) * 1.06, 0.05)
+			seg.mesh = sm
+			seg.material_override = row_mat
+			var mid_spread: float = (spread0 + spread1) * 0.5
+			seg.position = Vector3(
+				sin(ang) * mid_spread,
+				(y0 + y1) * 0.5,
+				z_offset - cos(ang) * mid_spread * 0.45)
+			seg.rotation.y = -ang
+			seg.rotation.x = deg_to_rad(lerp(2.0, 10.0, t0))
+			seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			group.add_child(seg)
+
 
 static func _make_fur_collar() -> Node3D:
 	var mesh_inst := MeshInstance3D.new()
@@ -688,17 +804,52 @@ static func _make_animal_pelt() -> Node3D:
 	pelt.position = Vector3(0, 1.55, -0.02)
 	return pelt
 
+## Breastplate — a curved shell over the chest plus a gorget, instead of a
+## single 0.88 x 0.55 x 0.52 cube that swallowed the whole torso.
 static func _make_chest_plate(color: Color) -> Node3D:
-	var plate := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(0.88, 0.55, 0.52)
-	plate.mesh = box
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color.lightened(0.15)
-	mat.metallic = 0.55; mat.roughness = 0.45
-	plate.material_override = mat
-	plate.position = Vector3(0, 1.50, 0)
-	return plate
+	var group := Node3D.new()
+	var plate_mat := _quick_mat(color.lightened(0.16), 0.42, 0.55)
+	var trim_mat := _quick_mat(color.lightened(0.34), 0.35, 0.70)
+
+	# Chest shell — angled slats riding on the OUTSIDE of the ribcage. Sitting
+	# them inside the torso radius made the armour disappear into the body and
+	# the character read as one rounded block.
+	for i in range(5):
+		var u: float = (float(i) - 2.0) / 2.0        # -1 .. 1
+		var ang: float = u * deg_to_rad(46.0)
+		var slat := MeshInstance3D.new()
+		var sm := BoxMesh.new()
+		sm.size = Vector3(0.19, 0.38, 0.06)
+		slat.mesh = sm
+		slat.material_override = plate_mat
+		slat.position = Vector3(sin(ang) * 0.34, 1.52, 0.10 + cos(ang) * 0.24)
+		slat.rotation.y = -ang
+		slat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		group.add_child(slat)
+
+	# Gorget collar
+	for i in range(6):
+		var a2: float = (float(i) - 2.5) / 2.5 * deg_to_rad(70.0)
+		var ring := MeshInstance3D.new()
+		var rm := BoxMesh.new(); rm.size = Vector3(0.16, 0.09, 0.06)
+		ring.mesh = rm
+		ring.material_override = trim_mat
+		ring.position = Vector3(sin(a2) * 0.33, 1.78, 0.06 + cos(a2) * 0.20)
+		ring.rotation.y = -a2
+		group.add_child(ring)
+
+	# Centre boss
+	var boss := MeshInstance3D.new()
+	var bm := SphereMesh.new()
+	bm.radius = 0.09; bm.height = 0.11
+	bm.radial_segments = 8; bm.rings = 4
+	boss.mesh = bm
+	boss.material_override = trim_mat
+	boss.position = Vector3(0, 1.54, 0.37)
+	group.add_child(boss)
+
+	return group
+
 
 static func _make_leather_apron() -> Node3D:
 	var apron := MeshInstance3D.new()
@@ -1219,7 +1370,7 @@ static func _make_sword() -> Node3D:
 	# Blade
 	var blade := MeshInstance3D.new()
 	var bm := BoxMesh.new()
-	bm.size = Vector3(0.07, 0.72, 0.02)
+	bm.size = Vector3(0.10, 0.72, 0.055)
 	blade.mesh = bm; blade.material_override = blade_mat
 	blade.position.y = -0.44
 	group.add_child(blade)
@@ -1316,7 +1467,7 @@ static func _make_spear() -> Node3D:
 	for i in range(3):
 		var wrap := MeshInstance3D.new()
 		var wm := CylinderMesh.new()
-		wm.top_radius = 0.032; wm.bottom_radius = 0.032; wm.height = 0.03
+		wm.top_radius = 0.040; wm.bottom_radius = 0.040; wm.height = 0.055
 		wrap.mesh = wm; wrap.material_override = wrap_mat
 		wrap.position.y = 0.05 - i * 0.06
 		group.add_child(wrap)
@@ -1436,13 +1587,13 @@ static func _make_tower_shield() -> Node3D:
 	emblem_mat.metallic = 0.85
 	var h_bar := MeshInstance3D.new()
 	var hm := BoxMesh.new()
-	hm.size = Vector3(0.30, 0.04, 0.02)
+	hm.size = Vector3(0.30, 0.065, 0.05)
 	h_bar.mesh = hm; h_bar.material_override = emblem_mat
 	h_bar.position = Vector3(0, -0.22, 0.27)
 	group.add_child(h_bar)
 	var v_bar := MeshInstance3D.new()
 	var vm := BoxMesh.new()
-	vm.size = Vector3(0.04, 0.40, 0.02)
+	vm.size = Vector3(0.065, 0.40, 0.05)
 	v_bar.mesh = vm; v_bar.material_override = emblem_mat
 	v_bar.position = Vector3(0, -0.22, 0.27)
 	group.add_child(v_bar)
@@ -1498,7 +1649,7 @@ static func _make_axe() -> Node3D:
 	# Axe blade
 	var blade := MeshInstance3D.new()
 	var bm := BoxMesh.new()
-	bm.size = Vector3(0.26, 0.28, 0.035)
+	bm.size = Vector3(0.28, 0.30, 0.065)
 	blade.mesh = bm
 	var bmat := StandardMaterial3D.new()
 	bmat.albedo_color = Color(0.78, 0.80, 0.84)
@@ -1509,7 +1660,7 @@ static func _make_axe() -> Node3D:
 	# Blade edge highlight
 	var edge := MeshInstance3D.new()
 	var em := BoxMesh.new()
-	em.size = Vector3(0.01, 0.26, 0.04)
+	em.size = Vector3(0.05, 0.28, 0.075)
 	edge.mesh = em
 	var emat := StandardMaterial3D.new()
 	emat.albedo_color = Color(0.95, 0.95, 0.98)
@@ -1549,7 +1700,7 @@ static func _make_dagger() -> Node3D:
 	var group := Node3D.new()
 	var blade := MeshInstance3D.new()
 	var bm := BoxMesh.new()
-	bm.size = Vector3(0.04, 0.38, 0.015)
+	bm.size = Vector3(0.07, 0.38, 0.055)
 	blade.mesh = bm
 	var bmat := StandardMaterial3D.new()
 	bmat.albedo_color = Color(0.88, 0.90, 0.92)
@@ -1560,7 +1711,7 @@ static func _make_dagger() -> Node3D:
 	# Guard
 	var guard := MeshInstance3D.new()
 	var gm := BoxMesh.new()
-	gm.size = Vector3(0.10, 0.025, 0.03)
+	gm.size = Vector3(0.13, 0.055, 0.06)
 	guard.mesh = gm
 	var gmat := StandardMaterial3D.new()
 	gmat.albedo_color = Color(0.28, 0.20, 0.14)
@@ -1585,7 +1736,7 @@ static func _make_longbow() -> Node3D:
 	# Bow arc
 	var bow := MeshInstance3D.new()
 	var torus := TorusMesh.new()
-	torus.inner_radius = 0.38; torus.outer_radius = 0.42
+	torus.inner_radius = 0.375; torus.outer_radius = 0.465
 	bow.mesh = torus; bow.material_override = bow_mat
 	bow.position.y = -0.22
 	bow.rotation.z = deg_to_rad(90.0)
@@ -1593,12 +1744,16 @@ static func _make_longbow() -> Node3D:
 	# Bowstring
 	var string := MeshInstance3D.new()
 	var sm := CylinderMesh.new()
-	sm.top_radius = 0.005; sm.bottom_radius = 0.005; sm.height = 0.78
+	sm.top_radius = 0.025; sm.bottom_radius = 0.025; sm.height = 0.80
 	string.mesh = sm
 	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(0.85, 0.80, 0.70)
+	smat.albedo_color = Color(0.70, 0.66, 0.56)
 	string.material_override = smat
-	string.position = Vector3(0.38, -0.22, 0)
+	# The torus is rotated 90 degrees about Z, so its ring lies in the YZ plane
+	# and its AXIS runs along X. The string was offset 0.38 along X, which is
+	# along that axis — it floated beside the character instead of crossing the
+	# bow. It belongs on a diameter of the ring: same centre, running vertically.
+	string.position = Vector3(0, -0.22, 0)
 	group.add_child(string)
 	group.position = Vector3(0.02, -0.10, 0.05)
 	return group

@@ -1,28 +1,24 @@
 extends AbilityBase
 
+## GDD §4 — Rally Cry (active) / War Banner (passive).
+## Squad within 10 tiles gets +20% speed and damage for 8s. 45s cooldown.
+
 func _init() -> void:
 	ability_name = "Rally Cry"
+	ability_blurb = "+20%% speed and damage to the squad within 10 tiles"
 	cooldown = Constants.WARLORD_RALLY_COOLDOWN
 
-func _execute_ability(caster: Node3D) -> void:
-	print("Warlord activates Rally Cry!")
-	# Spawn shockwave particle effect in 3D
-	var shockwave := MeshInstance3D.new()
-	var torus := TorusMesh.new()
-	torus.inner_radius = 0.5
-	torus.outer_radius = Constants.WARLORD_RALLY_RADIUS
-	shockwave.mesh = torus
-	
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0, 0.84, 0.0, 0.4)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.84, 0.0)
-	shockwave.material_override = mat
-	
-	caster.add_child(shockwave)
-	
-	# Tween expand & fade
-	var tween = caster.create_tween()
-	tween.tween_property(mat, "albedo_color:a", 0.0, 1.0)
-	tween.tween_callback(shockwave.queue_free)
+func _execute_ability(who: Node3D) -> void:
+	spawn_pulse(who, Constants.WARLORD_RALLY_RADIUS, Color(1.0, 0.84, 0.20))
+	var buffed := 1
+	who.apply_buff(
+		1.0 + Constants.WARLORD_RALLY_SPEED_BUFF,
+		1.0 + Constants.WARLORD_RALLY_DAMAGE_BUFF,
+		Constants.WARLORD_RALLY_DURATION)
+	for a in allies_within(who, Constants.WARLORD_RALLY_RADIUS):
+		a.apply_buff(
+			1.0 + Constants.WARLORD_RALLY_SPEED_BUFF,
+			1.0 + Constants.WARLORD_RALLY_DAMAGE_BUFF,
+			Constants.WARLORD_RALLY_DURATION)
+		buffed += 1
+	EventBus.legendary_moment.emit("Rally Cry (%d rallied)" % buffed, [who])

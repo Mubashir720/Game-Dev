@@ -1,11 +1,56 @@
 extends RefCounted
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  STRUCTURE FACTORY — Production-Quality 3D Buildings & Structures
-#  Detailed multi-part geometry, PBR materials, window/door details, lighting.
-# ═══════════════════════════════════════════════════════════════════════════════
+## ═══════════════════════════════════════════════════════════════════════════════
+##  STRUCTURE FACTORY — every buildable in GDD §6, built entirely from code.
+##
+##  Structures are static once placed, so they bake all the way down to a single
+##  mesh (plus any torch/brazier lights, which the baker preserves). A hut goes
+##  from ~45 MeshInstance3D to 1. With eight squads each building a full base,
+##  that is the difference between ~1,800 draw calls of scenery and ~40.
+## ═══════════════════════════════════════════════════════════════════════════════
 
+const Baker = preload("res://scripts/render/prop_baker.gd")
+
+
+## Ship-ready structure: one welded mesh, shared stylised material, collision
+## and lights preserved. This is what the build system and the map should use.
 static func build_structure(structure_type: String) -> Node3D:
+	var key := structure_type.to_lower()
+	var tpl := Baker.get_template("struct_" + key,
+			func(): return build_raw(key), 0, "solid")
+	if tpl.is_empty() or tpl.get("mesh") == null:
+		return build_raw(key)
+	return Baker.instantiate(tpl, true, true, "Structure_" + key)
+
+
+## Proximity Aura ring (GDD §6: +1 HP/s within 8 tiles of your Hut).
+## Attached at runtime, only for the owning squad, so enemies can't read your
+## aura radius off the map — and so it can pulse when it is actually healing.
+static func make_aura_ring(radius: float = 4.0, color: Color = Color(0.25, 0.85, 0.45)) -> MeshInstance3D:
+	var ring := MeshInstance3D.new()
+	ring.name = "ProximityAura"
+	var tm := TorusMesh.new()
+	tm.inner_radius = radius - 0.09
+	tm.outer_radius = radius
+	tm.rings = 32
+	tm.ring_segments = 5
+	ring.mesh = tm
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(color.r, color.g, color.b, 0.16)
+	m.emission_enabled = true
+	m.emission = color
+	m.emission_energy_multiplier = 0.35
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	ring.material_override = m
+	ring.position.y = 0.04
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return ring
+
+
+## Un-baked design output — for editing, previews and ghost build placement.
+static func build_raw(structure_type: String) -> Node3D:
 	match structure_type.to_lower():
 		"hut":              return _build_hut_basic()
 		"hut_upgraded":     return _build_hut_upgraded()
@@ -189,20 +234,12 @@ static func _build_hut_basic() -> Node3D:
 	chimney.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	group.add_child(chimney)
 
-	# Proximity Aura ring (passive +1 HP/s indicator)
-	var aura := MeshInstance3D.new()
-	var am := TorusMesh.new()
-	am.inner_radius = 3.8; am.outer_radius = 4.0
-	aura.mesh = am
-	var aura_mat := StandardMaterial3D.new()
-	aura_mat.albedo_color = Color(0.2, 0.8, 0.4, 0.25)
-	aura_mat.emission_enabled = true
-	aura_mat.emission = Color(0.2, 0.8, 0.4)
-	aura_mat.emission_energy_multiplier = 0.4
-	aura_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	aura.material_override = aura_mat
-	aura.position.y = 0.02
-	group.add_child(aura)
+	# NOTE: the Proximity Aura ring used to be built into the hut mesh here. It is
+	# gameplay feedback, not scenery — only your own squad should see it, and it
+	# should pulse when the aura is actually healing someone. It now lives in
+	# make_aura_ring() and is attached at runtime by the hut. Baking it in also
+	# meant it was welded into the structure's opaque mesh, which drew an 8-unit
+	# solid green ring across the map around every hut.
 
 	return group
 
