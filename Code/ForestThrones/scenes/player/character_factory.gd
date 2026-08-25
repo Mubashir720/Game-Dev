@@ -499,7 +499,8 @@ static func create_beastlord() -> Node3D:
 	rig.root.add_child(_make_horned_crown())
 	rig.root.add_child(_make_fur_collar())
 	rig.root.add_child(_make_animal_pelt())
-	rig.right_arm.add_child(_make_spear())
+	rig.root.add_child(_make_beast_skull_shoulder(1))
+	rig.right_arm.add_child(_make_beast_glaive())
 	return rig.root
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1437,6 +1438,84 @@ static func _make_scepter() -> Node3D:
 	orb.position.y = 0.12
 	group.add_child(orb)
 	group.position = Vector3(0.02, -0.10, 0.05)
+	return group
+
+## Beastlord signature weapon: a bone-hafted glaive crowned with a curved fang
+## blade, claw hooks and a fur-wrapped grip. Reads as feral, not a plain spear.
+static func _make_beast_glaive() -> Node3D:
+	var group := Node3D.new()
+	var bone := StandardMaterial3D.new()
+	bone.albedo_color = Color(0.90, 0.86, 0.74); bone.roughness = 0.5
+	var dark_bone := StandardMaterial3D.new()
+	dark_bone.albedo_color = Color(0.66, 0.60, 0.48); dark_bone.roughness = 0.55
+	var fur := StandardMaterial3D.new()
+	fur.albedo_color = Color(0.30, 0.20, 0.13); fur.roughness = 0.95
+
+	# Haft — a slightly tapered bone shaft.
+	var haft := MeshInstance3D.new()
+	var hc := CylinderMesh.new(); hc.top_radius = 0.028; hc.bottom_radius = 0.034; hc.height = 1.55
+	haft.mesh = hc; haft.material_override = dark_bone; haft.position.y = -0.60
+	group.add_child(haft)
+
+	# Curved fang blade at the head — two angled bone prisms forming a hook.
+	for i in range(2):
+		var fang := MeshInstance3D.new()
+		var fc := CylinderMesh.new(); fc.top_radius = 0.0; fc.bottom_radius = 0.07; fc.height = 0.42
+		fang.mesh = fc; fang.material_override = bone
+		fang.position = Vector3(0.03 * (1 if i == 0 else -1), 0.34, 0)
+		fang.rotation = Vector3(0, 0, deg_to_rad(18.0 * (1 if i == 0 else -1)))
+		group.add_child(fang)
+	# Claw hooks jutting sideways below the blade.
+	for s in [-1, 1]:
+		var claw := MeshInstance3D.new()
+		var cc := CylinderMesh.new(); cc.top_radius = 0.0; cc.bottom_radius = 0.03; cc.height = 0.16
+		claw.mesh = cc; claw.material_override = bone
+		claw.position = Vector3(0.07 * s, 0.14, 0)
+		claw.rotation = Vector3(0, 0, deg_to_rad(70.0 * s))
+		group.add_child(claw)
+	# Fur binding just under the blade.
+	for i in range(3):
+		var wrap := MeshInstance3D.new()
+		var wm := CylinderMesh.new(); wm.top_radius = 0.05; wm.bottom_radius = 0.05; wm.height = 0.06
+		wrap.mesh = wm; wrap.material_override = fur
+		wrap.position.y = 0.02 - i * 0.06
+		group.add_child(wrap)
+	group.position = Vector3(0.02, -0.10, 0.05)
+	return group
+
+## Beast-skull shoulder guard — a fanged animal skull worn as a pauldron.
+static func _make_beast_skull_shoulder(side: int) -> Node3D:
+	var group := Node3D.new()
+	var bone := StandardMaterial3D.new()
+	bone.albedo_color = Color(0.88, 0.83, 0.70); bone.roughness = 0.5
+	var skull := MeshInstance3D.new()
+	var sm := SphereMesh.new(); sm.radius = 0.16; sm.height = 0.26
+	skull.mesh = sm; skull.material_override = bone
+	group.add_child(skull)
+	# Snout.
+	var snout := MeshInstance3D.new()
+	var bm := BoxMesh.new(); bm.size = Vector3(0.12, 0.10, 0.16)
+	snout.mesh = bm; snout.material_override = bone
+	snout.position = Vector3(0, -0.03, 0.14)
+	group.add_child(snout)
+	# Eye sockets (dark).
+	var socket_mat := StandardMaterial3D.new(); socket_mat.albedo_color = Color(0.08, 0.06, 0.05)
+	for s in [-1, 1]:
+		var eye := MeshInstance3D.new()
+		var em := SphereMesh.new(); em.radius = 0.035; em.height = 0.05
+		eye.mesh = em; eye.material_override = socket_mat
+		eye.position = Vector3(0.06 * s, 0.02, 0.14)
+		group.add_child(eye)
+	# Horns curving up off the skull.
+	for s in [-1, 1]:
+		var horn := MeshInstance3D.new()
+		var hm := CylinderMesh.new(); hm.top_radius = 0.0; hm.bottom_radius = 0.035; hm.height = 0.22
+		horn.mesh = hm; horn.material_override = bone
+		horn.position = Vector3(0.08 * s, 0.12, -0.02)
+		horn.rotation = Vector3(deg_to_rad(-20), 0, deg_to_rad(24 * s))
+		group.add_child(horn)
+	group.position = Vector3(0.42 * side, 1.62, 0)
+	group.scale = Vector3.ONE * 0.95
 	return group
 
 static func _make_spear() -> Node3D:

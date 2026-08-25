@@ -18,6 +18,7 @@ extends Control
 const UITheme = preload("res://scenes/hud/ui_theme.gd")
 const CharacterFactory = preload("res://scenes/player/character_factory.gd")
 const CharacterAnimator = preload("res://scenes/player/character_animator.gd")
+const RiggedCharacter = preload("res://scenes/player/rigged_character.gd")
 
 ## GDD §4 — Archetypes: Active and Passive Abilities.
 const ARCHETYPES := {
@@ -111,7 +112,7 @@ var _selected_role: int = Constants.Role.KING
 var _selected_id: String = "warlord"
 var _preview: Node3D = null
 var _preview_spin := 0.0
-var _animator: CharacterAnimator = null
+var _animator = null
 var _viewport: SubViewport = null
 var _cards_box: VBoxContainer = null
 var _detail_box: VBoxContainer = null
@@ -335,10 +336,17 @@ func _rebuild_preview(id: String) -> void:
 	rim.light_color = UITheme.role_color(_selected_role)
 	scene.add_child(rim)
 
-	_preview = CharacterFactory.create_character_by_archetype(id)
-	if _preview:
-		scene.add_child(_preview)
-	_animator = CharacterAnimator.new()
+	if ResourceLoader.exists("res://assets/models/characters/Knight.glb"):
+		var rc := RiggedCharacter.new()
+		rc.setup(id, UITheme.role_color(_selected_role))
+		_preview = rc
+		scene.add_child(rc)
+		_animator = rc
+	else:
+		_preview = CharacterFactory.create_character_by_archetype(id)
+		if _preview:
+			scene.add_child(_preview)
+		_animator = CharacterAnimator.new()
 
 	var cam := Camera3D.new()
 	cam.fov = 30.0

@@ -28,8 +28,11 @@ func _execute_ability(who: Node3D) -> void:
 	if nearest == null:
 		return
 	_companion = nearest
-	nearest.set_meta("owner_actor", who)
 	nearest.set_meta("tamed", true)
+	# Actually bind the beast to its owner so it follows and guards — beast_base
+	# drives its behaviour off owner_player, not the meta flag.
+	if "owner_player" in nearest:
+		nearest.owner_player = who
 	nearest.scale *= 1.0 + Constants.BEASTLORD_BEAST_STAT_BUFF * 0.3
 	spawn_pulse(who, TAME_RADIUS_TILES, Color(0.55, 0.85, 0.40))
 	EventBus.beast_tamed.emit(who, nearest)

@@ -51,10 +51,11 @@ func exit_build_mode() -> void:
 func can_build(player: Node3D, data: StructureData) -> bool:
 	if not is_instance_valid(player):
 		return false
-	if not "inventory" in player:
+	var inv = player.get("inventory")
+	if inv == null or not (inv is Dictionary):
 		return false
 	for r_type in data.cost.keys():
-		if player.inventory.get(r_type, 0) < data.cost[r_type]:
+		if int(inv.get(r_type, 0)) < int(data.cost[r_type]):
 			return false
 	return true
 
@@ -79,17 +80,32 @@ func place_structure(build_position: Vector3, struct_id: String, player: Node3D)
 	structure.current_state = StructureBase.StructureState.CONSTRUCTING
 	structure.position = Vector3(build_position.x, 0.0, build_position.z)
 
-	# Add to World > Structures
-	var world := get_tree().current_scene.find_child("World", true, false) as Node3D
-	if world:
+	# Attach under the World node. Resolve it robustly: the player carries a direct
+	# `world` reference (always valid in a live match); fall back to the scene tree
+	# only if that is missing. `get_tree().current_scene` can be null depending on
+	# how the match was launched, which is what crashed the old lookup.
+	var world: Node = null
+	if "world" in player and player.world != null and is_instance_valid(player.world):
+		world = player.world
+	if world == null:
+		var cs := get_tree().current_scene
+		if cs != null:
+			world = cs.find_child("World", true, false)
+	if world == null:
+		world = get_tree().root.find_child("World", true, false)
+
+	if world != null:
 		var structures_node := world.get_node_or_null("Structures")
-		if structures_node:
+		if structures_node != null:
 			structures_node.add_child(structure)
 		else:
 			world.add_child(structure)
 	else:
-		get_tree().current_scene.add_child(structure)
+		# Last resort: never drop the structure on the floor of a null scene.
+		add_child(structure)
 
+	if player.has_method("play_anim"):
+		player.play_anim("build")
 	exit_build_mode()
 	return true
 

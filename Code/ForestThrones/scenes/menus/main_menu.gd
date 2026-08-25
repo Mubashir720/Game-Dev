@@ -16,6 +16,7 @@ extends Control
 const UITheme = preload("res://scenes/hud/ui_theme.gd")
 const CharacterFactory = preload("res://scenes/player/character_factory.gd")
 const CharacterAnimator = preload("res://scenes/player/character_animator.gd")
+const RiggedCharacter = preload("res://scenes/player/rigged_character.gd")
 
 const ARCHETYPE_BLURB := {
 	"warlord":   "Rally Cry · War Banner",
@@ -34,7 +35,7 @@ const ARCHETYPE_BLURB := {
 
 var _preview_character: Node3D = null
 var _preview_spin := 0.0
-var _preview_animator: CharacterAnimator = null
+var _preview_animator = null
 var _subviewport: SubViewport = null
 var _subtitle: Label = null
 var _idle_t := 0.0
@@ -216,10 +217,17 @@ func _build_preview_scene() -> void:
 	pedestal.position.y = -0.11
 	scene.add_child(pedestal)
 
-	_preview_character = CharacterFactory.create_character_by_archetype(GameManager.selected_archetype_id)
-	if _preview_character:
-		scene.add_child(_preview_character)
-	_preview_animator = CharacterAnimator.new()
+	if ResourceLoader.exists("res://assets/models/characters/Knight.glb"):
+		var rc := RiggedCharacter.new()
+		rc.setup(GameManager.selected_archetype_id, Color(0.80, 0.62, 0.30))
+		_preview_character = rc
+		scene.add_child(rc)
+		_preview_animator = rc
+	else:
+		_preview_character = CharacterFactory.create_character_by_archetype(GameManager.selected_archetype_id)
+		if _preview_character:
+			scene.add_child(_preview_character)
+		_preview_animator = CharacterAnimator.new()
 
 	var cam := Camera3D.new()
 	cam.fov = 32.0

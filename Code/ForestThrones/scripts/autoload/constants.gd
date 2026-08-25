@@ -105,7 +105,8 @@ const WOUNDED_HP_THRESHOLD := 40.0             # 40 HP or below = Wounded (-20% 
 const CRITICAL_HP_THRESHOLD := 10.0            # 10 HP or below = Critical (-40% speed)
 const DOWNED_BLEED_RATE := 0.333               # 1 HP per 3 seconds
 const DOWNED_BLEED_TIME := 30.0                # 30 seconds to bleed out completely
-const DOWNED_CRAWL_SPEED := 20.0               # 20 px/s
+const DOWNED_CRAWL_SPEED := 1.2                # m/s while downed (GDD §9 ~20px/s → a slow drag in world units)
+const IMPRISON_ESCAPE_TIME := 18.0             # seconds a caged prisoner takes to break free (stands in for the lock-pick mini-game)
 
 const HANDCUFF_HOLD_TIME := 2.0                # 2 seconds to handcuff downed player
 const CARRY_SPEED_PENALTY := 0.60              # speed drops to 60%
@@ -157,6 +158,8 @@ const ROGUE_SQUAD_SPEED_BUFF := 0.10
 # === BEAST COMPANIONS (GDD §11 System 7) ===
 const BEAST_HUNGER_DECAY_RATE := 0.05          # -1 per 20 seconds
 const BEAST_EVOLUTION_XP := 30
+const BEAST_WOLF_DAMAGE := 12.0                # companion bite damage (GDD §11)
+const BEAST_ATTACK_COOLDOWN := 1.1             # seconds between bites
 const BEAST_DIRE_WOLF_HP_BONUS := 20.0
 const BEAST_DIRE_WOLF_DAMAGE_BONUS := 5.0
 const BEAST_RAVEN_SCOUT_RANGE := 30.0

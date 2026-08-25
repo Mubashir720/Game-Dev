@@ -43,10 +43,21 @@ var _ticker_label: Label = null
 var _joystick: Control = null
 var _ability_button: Button = null
 var _ability_cooldown: ProgressBar = null
+var _build_menu: PanelContainer = null
+var _context_menu: PanelContainer = null
+var _last_attack_press: float = -1.0
 var _minimap: Control = null
 
 var _ticker_timer := 0.0
 var _feed_lines: Array = []
+
+var _zone_overlay: ColorRect = null
+var _zone_label: Label = null
+var _death_panel: PanelContainer = null
+var _death_label: Label = null
+var _respawn_left: float = 0.0
+var _eliminated: bool = false
+var _zone_pulse: float = 0.0
 
 
 func _ready() -> void:
@@ -54,6 +65,7 @@ func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build()
+	_build_overlays()
 	_connect_events()
 
 
@@ -63,8 +75,19 @@ func bind_match(match_director, world_node) -> void:
 	player = match_director.player_actor
 	if player:
 		player.hp_changed.connect(func(_c, _m): _refresh_vitals())
+		if player.has_signal("capture_prompt"):
+			player.capture_prompt.connect(_show_capture_menu)
+		if player.has_signal("prison_prompt"):
+			player.prison_prompt.connect(_show_prison_menu)
+		if player.has_signal("shop_prompt"):
+			player.shop_prompt.connect(_show_shop)
 	if _minimap and _minimap.has_method("bind_match"):
 		_minimap.bind_match(match_director, world_node)
+	# Death → respawn feedback (GDD §9). The director owns the respawn clock.
+	if director.has_signal("player_respawning"):
+		director.player_respawning.connect(_on_player_respawning)
+	if director.has_signal("player_respawned"):
+		director.player_respawned.connect(_on_player_respawned)
 	_refresh_ability()
 	_rebuild_roster()
 	_refresh_clock()
@@ -213,6 +236,16 @@ func _build_left_column(parent: Control) -> void:
 	roster.add_child(rcol)
 	rcol.add_child(UITheme.body("YOUR SQUAD", UITheme.FONT_MICRO, UITheme.TEXT_FAINT))
 
+	# Vote to Exile (GDD §11) — the squad's counter-play to a suspected traitor.
+	# Disabled until minute 8, when activation and voting both unlock.
+	var exile_btn := Button.new()
+	exile_btn.name = "ExileButton"
+	exile_btn.text = "⚖  VOTE TO EXILE"
+	exile_btn.custom_minimum_size = Vector2(0, 34)
+	exile_btn.disabled = true
+	exile_btn.pressed.connect(_open_exile_vote)
+	rcol.add_child(exile_btn)
+
 	# ── Event feed ────────────────────────────────────────────────────────────
 	_feed = VBoxContainer.new()
 	_feed.add_theme_constant_override("separation", 2)
@@ -326,9 +359,10 @@ func _build_controls(parent: Control) -> void:
 	# Thumb-arc placement: the primary action sits where the thumb rests, the
 	# rest curve away from it. A vertical stack of equal buttons is the classic
 	# mistake — the top one is unreachable without shifting grip.
+	# ATTACK: single tap = normal swing, double tap = heavy CHARGE attack (GDD §9).
 	var attack := _action_button("ATTACK", UITheme.BLOOD, 108, 108, UITheme.FONT_LABEL)
 	attack.position = Vector2(196, 106)
-	attack.pressed.connect(func(): if player: player.try_attack())
+	attack.pressed.connect(_on_attack_pressed)
 	cluster.add_child(attack)
 
 	var interact := _action_button("USE", UITheme.MOSS, 76, 76)
@@ -336,13 +370,13 @@ func _build_controls(parent: Control) -> void:
 	interact.pressed.connect(func(): if player: player.try_interact())
 	cluster.add_child(interact)
 
+	# BUILD: opens a menu to pick a structure, then places it in front of you.
 	var build := _action_button("BUILD", UITheme.FROST, 72, 72)
 	build.position = Vector2(92, 26)
-	build.pressed.connect(func():
-		if player:
-			player.build_mode = not player.build_mode
-			_push_feed("Build mode " + ("ON" if player.build_mode else "OFF"), UITheme.FROST))
+	build.pressed.connect(_toggle_build_menu)
 	cluster.add_child(build)
+
+	_build_build_menu(parent)
 
 	# The ability is a PILL, not a circle. Twelve archetypes means twelve names,
 	# and "SHIELD WALL" / "RAPID BUILD" do not fit inside an 84px disc — that is
@@ -425,6 +459,63 @@ func _action_button(label: String, tint: Color, w: int, h: int,
 #  LIVE DATA
 # ═══════════════════════════════════════════════════════════════════════════════
 
+## Full-screen overlays that sit above every other HUD element: the red
+## out-of-zone warning (GDD §12) and the death / respawn screen (GDD §9).
+func _build_overlays() -> void:
+	_zone_overlay = ColorRect.new()
+	_zone_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_zone_overlay.color = Color(0.75, 0.05, 0.05, 0.0)
+	_zone_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_zone_overlay)
+
+	_zone_label = Label.new()
+	_zone_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_zone_label.offset_top = 90
+	_zone_label.offset_left = -260
+	_zone_label.offset_right = 260
+	_zone_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_zone_label.add_theme_color_override("font_color", Color(1, 0.85, 0.85))
+	_zone_label.add_theme_font_size_override("font_size", 22)
+	_zone_label.text = "⚠  OUTSIDE THE BORDER — RETURN TO THE ZONE"
+	_zone_label.visible = false
+	_zone_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_zone_label)
+
+	_death_panel = PanelContainer.new()
+	_death_panel.add_theme_stylebox_override("panel",
+		UITheme.flat_style(Color(0.05, 0.02, 0.02, 0.82), UITheme.RADIUS_LG))
+	_death_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_death_panel.offset_left = -220
+	_death_panel.offset_right = 220
+	_death_panel.offset_top = -70
+	_death_panel.offset_bottom = 70
+	_death_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_death_panel.visible = false
+	add_child(_death_panel)
+	_death_label = Label.new()
+	_death_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_death_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_death_label.add_theme_color_override("font_color", Color(1, 0.9, 0.85))
+	_death_label.add_theme_font_size_override("font_size", 26)
+	_death_panel.add_child(_death_label)
+
+
+func _on_player_respawning(seconds: float) -> void:
+	if seconds < 0.0:
+		_eliminated = true
+		_respawn_left = 0.0
+	else:
+		_eliminated = false
+		_respawn_left = seconds
+
+
+func _on_player_respawned() -> void:
+	_eliminated = false
+	_respawn_left = 0.0
+	if _death_panel:
+		_death_panel.visible = false
+
+
 func _process(delta: float) -> void:
 	if player and is_instance_valid(player) and _joystick:
 		player.set_stick_input(_joystick.value)
@@ -434,11 +525,316 @@ func _process(delta: float) -> void:
 	_refresh_economy()
 	_refresh_roster()
 	_refresh_ability()
+	_update_zone_overlay(delta)
+	_update_death_overlay(delta)
+
+	# Unlock the exile vote at minute 8 (GDD §11).
+	var exile_btn := find_child("ExileButton", true, false)
+	if exile_btn and director and director.has_method("can_vote_exile"):
+		exile_btn.disabled = not director.can_vote_exile()
 
 	if _ticker_timer > 0.0:
 		_ticker_timer -= delta
 		if _ticker_timer <= 0.0 and _ticker:
 			_ticker.visible = false
+
+
+## Pulsing red wash while the player stands in the closing border. The damage
+## itself is applied by ZoneShrink; this is the "get out" feedback (GDD §12).
+func _update_zone_overlay(delta: float) -> void:
+	if _zone_overlay == null:
+		return
+	var outside := player != null and is_instance_valid(player) and bool(player.get_meta("outside_zone", false))
+	if outside:
+		_zone_pulse += delta * 4.0
+		var a: float = 0.16 + 0.10 * (0.5 + 0.5 * sin(_zone_pulse))
+		_zone_overlay.color = Color(0.75, 0.05, 0.05, a)
+		_zone_label.visible = true
+	else:
+		_zone_pulse = 0.0
+		if _zone_overlay.color.a > 0.0:
+			_zone_overlay.color = Color(0.75, 0.05, 0.05, 0.0)
+			_zone_label.visible = false
+
+
+func _update_death_overlay(_delta: float) -> void:
+	if _death_panel == null:
+		return
+	if _eliminated:
+		_death_panel.visible = true
+		_death_label.text = "ELIMINATED\nNo Hut to respawn at"
+		return
+	if _respawn_left > 0.0:
+		_respawn_left = max(0.0, _respawn_left - _delta)
+		_death_panel.visible = true
+		_death_label.text = "DOWNED\nRespawning at your Hut in %ds" % int(ceil(_respawn_left))
+	elif _death_panel.visible and player != null and player.is_alive():
+		_death_panel.visible = false
+
+
+# ── Contextual choice popup (capture / prison options) ────────────────────────
+func _show_choice(title: String, options: Array) -> void:
+	if _context_menu != null and is_instance_valid(_context_menu):
+		_context_menu.queue_free()
+	var menu := PanelContainer.new()
+	menu.add_theme_stylebox_override("panel",
+		UITheme.flat_style(Color(0.06, 0.09, 0.13, 0.97), UITheme.RADIUS_LG))
+	menu.set_anchors_preset(Control.PRESET_CENTER)
+	menu.offset_left = -190
+	menu.offset_right = 190
+	menu.offset_top = -190
+	menu.offset_bottom = 190
+	add_child(menu)
+	_context_menu = menu
+
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 16)
+	menu.add_child(margin)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	margin.add_child(col)
+
+	var t := UITheme.body(title, UITheme.FONT_HEADING, UITheme.TEXT)
+	t.autowrap_mode = TextServer.AUTOWRAP_OFF
+	col.add_child(t)
+
+	for opt in options:
+		var b := Button.new()
+		b.text = opt.label
+		b.custom_minimum_size = Vector2(320, 50)
+		var cb: Callable = opt.cb
+		b.pressed.connect(func():
+			cb.call()
+			if is_instance_valid(menu):
+				menu.queue_free())
+		col.add_child(b)
+
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.custom_minimum_size = Vector2(320, 40)
+	cancel.pressed.connect(func(): if is_instance_valid(menu): menu.queue_free())
+	col.add_child(cancel)
+
+## NPC vendor shop (GDD §7). Rows of item · price · Buy, spending squad coins.
+## Stays open for several purchases; refreshes affordability after each buy.
+func _show_shop(vendor) -> void:
+	if _context_menu != null and is_instance_valid(_context_menu):
+		_context_menu.queue_free()
+	if vendor == null or not is_instance_valid(vendor):
+		return
+	var menu := PanelContainer.new()
+	menu.add_theme_stylebox_override("panel",
+		UITheme.flat_style(Color(0.06, 0.09, 0.13, 0.98), UITheme.RADIUS_LG))
+	menu.set_anchors_preset(Control.PRESET_CENTER)
+	menu.offset_left = -220
+	menu.offset_right = 220
+	menu.offset_top = -210
+	menu.offset_bottom = 210
+	add_child(menu)
+	_context_menu = menu
+
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 16)
+	menu.add_child(margin)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	margin.add_child(col)
+
+	var shop_name := "BLACK MARKET" if vendor.get("is_black_market") else "NPC VENDOR"
+	var header := UITheme.body(shop_name, UITheme.FONT_HEADING, UITheme.TEXT)
+	header.autowrap_mode = TextServer.AUTOWRAP_OFF
+	col.add_child(header)
+	var coin_line := UITheme.body("", UITheme.FONT_LABEL, UITheme.GOLD)
+	col.add_child(coin_line)
+
+	var _refresh_coins := func():
+		var t: int = player.squad_brain.treasury if player and player.squad_brain else 0
+		coin_line.text = "Treasury: %d coins" % t
+
+	for entry in vendor.catalog():
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		col.add_child(row)
+		var lbl := UITheme.body("%s  · %s" % [entry["label"], entry["desc"]],
+				UITheme.FONT_LABEL, UITheme.TEXT_MUTED)
+		lbl.custom_minimum_size = Vector2(250, 0)
+		row.add_child(lbl)
+		var buy := Button.new()
+		buy.text = "Buy %dc" % entry["price"]
+		buy.custom_minimum_size = Vector2(110, 44)
+		var id: String = entry["id"]
+		buy.pressed.connect(func():
+			var res: Dictionary = player.buy_from_vendor(vendor, id)
+			if res.get("ok", false):
+				_push_feed("Bought %s" % res.get("reason", ""), UITheme.MOSS)
+			else:
+				_push_feed("Can't buy: %s" % res.get("reason", ""), UITheme.TEXT_MUTED)
+			_refresh_coins.call()
+			_refresh_economy())
+		row.add_child(buy)
+
+	_refresh_coins.call()
+
+	var close := Button.new()
+	close.text = "Close"
+	close.custom_minimum_size = Vector2(360, 40)
+	close.pressed.connect(func(): if is_instance_valid(menu): menu.queue_free())
+	col.add_child(close)
+
+
+## Vote to Exile (GDD §11): pick a squadmate; the three bots vote by trust.
+func _open_exile_vote() -> void:
+	if director == null or player == null:
+		return
+	if director.has_method("can_vote_exile") and not director.can_vote_exile():
+		_push_feed("Voting unlocks at minute 8", UITheme.TEXT_MUTED)
+		return
+	var options: Array = []
+	for m in director.player_squad.members:
+		if m == player or not is_instance_valid(m):
+			continue
+		var mm = m
+		options.append({"label": "Exile %s" % String(m.archetype_id).capitalize(), "cb": func():
+			var res: Dictionary = director.call_exile_vote(mm)
+			if not res.get("ok", false):
+				_push_feed(res.get("reason", "Vote failed"), UITheme.TEXT_MUTED)
+			elif res.get("exiled", false):
+				if res.get("was_traitor", false):
+					_push_feed("JUSTICE SERVED — the traitor is exiled! (+10)", UITheme.GOLD)
+				else:
+					_push_feed("Squad exiled an innocent… down to 3.", UITheme.EMBER)
+			else:
+				_push_feed("Vote failed — only %d of 4 agreed" % res.get("yes", 1), UITheme.TEXT_MUTED)})
+	if options.is_empty():
+		return
+	_show_choice("VOTE TO EXILE", options)
+
+
+func _show_capture_menu(enemy) -> void:
+	_show_choice("DOWNED ENEMY", [
+		{"label": "⛓  CAPTURE  (carry to your base)", "cb": func():
+			if player: player.capture_downed(enemy)
+			_push_feed("Prisoner captured — carry them home", UITheme.FROST)},
+		{"label": "☠  EXECUTE  (loot, but curses you)", "cb": func():
+			if player: player.execute_downed(enemy)
+			_push_feed("Enemy executed", UITheme.BLOOD)},
+	])
+
+func _show_prison_menu(prisoner) -> void:
+	_show_choice("PRISONER OPTIONS", [
+		{"label": "⚖  RANSOM   (+50 coins)", "cb": func():
+			if player: _push_feed(player.prison_action("ransom", prisoner), UITheme.GOLD)},
+		{"label": "🔍  INTERROGATE", "cb": func():
+			if player: _push_feed(player.prison_action("interrogate", prisoner), UITheme.FROST)},
+		{"label": "⚒  CHAIN GANG  (forced labor)", "cb": func():
+			if player: _push_feed(player.prison_action("labor", prisoner), UITheme.MOSS)},
+		{"label": "🏴  SELL TO BLACK MARKET  (+15)", "cb": func():
+			if player: _push_feed(player.prison_action("sell", prisoner), UITheme.PLUM)},
+		{"label": "☠  EXECUTE", "cb": func():
+			if player: _push_feed(player.prison_action("execute", prisoner), UITheme.BLOOD)},
+		{"label": "↩  RELEASE (Debtor's Mark)", "cb": func():
+			if player: _push_feed(player.prison_action("community_service", prisoner), UITheme.TEXT_MUTED)},
+	])
+
+
+# ── Attack: single vs double tap ──────────────────────────────────────────────
+func _on_attack_pressed() -> void:
+	if player == null:
+		return
+	var now := Time.get_ticks_msec() / 1000.0
+	if _last_attack_press > 0.0 and now - _last_attack_press < 0.30:
+		_last_attack_press = -1.0
+		if player.has_method("try_heavy_attack"):
+			player.try_heavy_attack()
+		_push_feed("CHARGE ATTACK!", UITheme.BLOOD)
+	else:
+		_last_attack_press = now
+		player.try_attack()
+
+
+# ── Build menu popup ──────────────────────────────────────────────────────────
+const _RES_NAME := ["Wood", "Stone", "Food", "Water", "Metal", "Herbs"]
+
+func _build_build_menu(parent: Control) -> void:
+	_build_menu = PanelContainer.new()
+	_build_menu.add_theme_stylebox_override("panel",
+		UITheme.flat_style(Color(0.06, 0.09, 0.13, 0.97), UITheme.RADIUS_LG))
+	# Centre it on screen, clear of the right-hand action buttons.
+	_build_menu.set_anchors_preset(Control.PRESET_CENTER)
+	_build_menu.offset_left = -190
+	_build_menu.offset_right = 190
+	_build_menu.offset_top = -240
+	_build_menu.offset_bottom = 240
+	_build_menu.visible = false
+	parent.add_child(_build_menu)
+
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 14)
+	_build_menu.add_child(margin)
+
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 8)
+	margin.add_child(outer)
+
+	var header := HBoxContainer.new()
+	outer.add_child(header)
+	var title := UITheme.body("BUILD — choose a structure", UITheme.FONT_LABEL, UITheme.TEXT)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.autowrap_mode = TextServer.AUTOWRAP_OFF
+	header.add_child(title)
+	var close := Button.new()
+	close.text = "✕"
+	close.custom_minimum_size = Vector2(40, 36)
+	close.pressed.connect(func(): _build_menu.visible = false)
+	header.add_child(close)
+
+	# Scrollable so all 11 structures fit on any screen height.
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(340, 400)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	outer.add_child(scroll)
+
+	var col := VBoxContainer.new()
+	col.name = "Col"
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_theme_constant_override("separation", 6)
+	scroll.add_child(col)
+
+func _toggle_build_menu() -> void:
+	if _build_menu == null or player == null:
+		return
+	_build_menu.visible = not _build_menu.visible
+	if _build_menu.visible:
+		_refresh_build_menu()
+
+func _refresh_build_menu() -> void:
+	if _build_menu == null or player == null:
+		return
+	var col := _build_menu.find_child("Col", true, false)
+	if col == null:
+		return
+	# Clear old option rows.
+	for i in range(col.get_child_count() - 1, -1, -1):
+		col.get_child(i).queue_free()
+	for opt in player.buildable_options():
+		var costs: Array = []
+		for t in opt.cost.keys():
+			costs.append("%d %s" % [opt.cost[t], _RES_NAME[int(t)] if int(t) < _RES_NAME.size() else "?"])
+		var b := Button.new()
+		b.text = "%s      %s" % [opt.label, ", ".join(costs)]
+		b.disabled = not opt.affordable
+		b.custom_minimum_size = Vector2(0, 44)
+		var sid: String = opt.id
+		b.pressed.connect(func():
+			if player and player.place_build(sid):
+				_push_feed("Built %s" % opt.label, UITheme.FROST)
+			else:
+				_push_feed("Can't build %s" % opt.label, UITheme.EMBER)
+			_build_menu.visible = false)
+		col.add_child(b)
 
 
 func _refresh_clock() -> void:

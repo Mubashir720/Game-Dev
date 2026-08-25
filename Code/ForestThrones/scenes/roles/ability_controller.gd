@@ -78,6 +78,8 @@ func use() -> bool:
 		return false
 	if ability.activate(owner_actor):
 		ability_used.emit(ability.ability_name)
+		if owner_actor.has_method("play_anim"):
+			owner_actor.play_anim("ability")
 		return true
 	return false
 

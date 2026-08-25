@@ -30,6 +30,10 @@ const CharacterFactory = preload("res://scenes/player/character_factory.gd")
 signal match_ready()
 signal squad_eliminated(squad)
 signal match_over(winning_squad)
+## Fired for the local player only, so the HUD can show a respawn countdown or a
+## final "eliminated" screen. seconds < 0 means permanent elimination (no Hut).
+signal player_respawning(seconds: float)
+signal player_respawned()
 
 const SQUAD_COUNT := 8
 const SQUAD_SIZE := 4
@@ -70,6 +74,10 @@ var _lod_timer := 0.0
 var _rng := RandomNumberGenerator.new()
 var _ended := false
 
+## Dead actors waiting to respawn at their Hut. Each entry: {actor, brain, at}.
+## GDD §9: 15s for most roles, 30s for the King. No Hut → not queued (permanent).
+var _respawn_queue: Array = []
+
 var stats := {"actors": 0, "squads": 0, "lod_full": 0, "lod_reduced": 0, "lod_minimal": 0}
 
 
@@ -84,6 +92,15 @@ func setup(world_node, player_archetype: String, seed_value: int = 20250820) -> 
 
 	var squad_total: int = SQUAD_COUNT if spawn_full_roster else 1
 	var player_squad_index := 0
+
+	# The player takes the squad slot whose ROLE matches their chosen archetype —
+	# otherwise a non-King pick (Witch, Guardian, Archer…) lands in the King slot,
+	# fails the King-archetype check, and silently reverts to the first King
+	# (Warlord). That was the "every character becomes the first one" bug.
+	var player_role: int = CharacterFactory.ARCHETYPE_ROLE.get(player_archetype, Constants.Role.KING)
+	var player_slot: int = ROLE_ORDER.find(player_role)
+	if player_slot < 0:
+		player_slot = 0
 
 	for s in range(squad_total):
 		var brain := SquadBrain.new()
@@ -100,7 +117,7 @@ func setup(world_node, player_archetype: String, seed_value: int = 20250820) -> 
 
 		for r in range(SQUAD_SIZE):
 			var role: Constants.Role = ROLE_ORDER[r]
-			var is_player := (s == player_squad_index and r == 0)
+			var is_player := (s == player_squad_index and r == player_slot)
 			var actor := _spawn_actor(brain, role, r, is_player, player_archetype)
 			brain.register(actor)
 			if is_player:
@@ -156,8 +173,19 @@ func _spawn_actor(brain: SquadBrain, role: Constants.Role, slot: int,
 	world.add_child(actor)
 	actor.global_position = spawn
 
+	# Every actor respawns at its squad Hut through one central handler, so the
+	# player and the 31 bots follow identical death→respawn rules.
+	actor.died.connect(_on_actor_died.bind(actor, brain))
+
 	if actor is BotAgent:
 		(actor as BotAgent).setup(actors.size(), brain, world, self)
+	elif is_player:
+		# The player's body needs the same three references the bots get through
+		# setup(): without them, harvesting, combat targeting, capture, imprison
+		# and building all silently no-op (director/world/squad_brain are null).
+		actor.world = world
+		actor.director = self
+		actor.squad_brain = brain
 
 	world.add_stream_anchor(actor)
 	actors.append(actor)
@@ -207,6 +235,75 @@ func _process(delta: float) -> void:
 		_lod_timer = lod_interval
 		_update_lod()
 		_check_win_condition()
+	_tick_respawns(delta)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  RESPAWN  (GDD §9 — die → respawn at Hut after 15s, King 30s; no Hut = out)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+func _on_actor_died(_killer, actor, brain) -> void:
+	if _ended or actor == null or not is_instance_valid(actor):
+		return
+	# No Hut standing → this death is permanent. Tell the player if it's them.
+	if brain == null or not brain.has_standing_hut():
+		if actor == player_actor:
+			player_respawning.emit(-1.0)
+		return
+	var delay: float = Constants.KING_RESPAWN_TIME if actor.role == Constants.Role.KING \
+			else Constants.DEFAULT_RESPAWN_TIME
+	_respawn_queue.append({"actor": actor, "brain": brain, "at": delay})
+	if actor == player_actor:
+		player_respawning.emit(delay)
+
+
+func _tick_respawns(delta: float) -> void:
+	if _respawn_queue.is_empty():
+		return
+	var i := _respawn_queue.size() - 1
+	while i >= 0:
+		var e: Dictionary = _respawn_queue[i]
+		var actor = e["actor"]
+		if not is_instance_valid(actor):
+			_respawn_queue.remove_at(i)
+			i -= 1
+			continue
+		e["at"] -= delta
+		if e["at"] <= 0.0:
+			_respawn_queue.remove_at(i)
+			_respawn_actor(actor, e["brain"])
+		i -= 1
+
+
+func _respawn_actor(actor, brain) -> void:
+	if actor == null or not is_instance_valid(actor):
+		return
+	# Hut may have fallen while the timer ran — re-check before returning them.
+	if brain == null or not brain.has_standing_hut():
+		if actor == player_actor:
+			player_respawning.emit(-1.0)
+		return
+	actor.global_position = _hut_spawn_point(brain)
+	actor.velocity = Vector3.ZERO
+	actor.revive(actor.max_hp())
+	actor.hunger = max(actor.hunger, Constants.MAX_HUNGER * 0.5)
+	actor.thirst = max(actor.thirst, Constants.MAX_THIRST * 0.5)
+	if actor == player_actor:
+		player_respawned.emit()
+
+
+## Spawn just beside the Hut, not on top of it, so the body isn't stuck in the mesh.
+func _hut_spawn_point(brain) -> Vector3:
+	var base: Vector3 = brain.base_position
+	for s in brain.structures:
+		if is_instance_valid(s) and String(s.get_meta("structure_type", "")).begins_with("hut"):
+			base = s.global_position
+			break
+	var off := Vector3(1.6, 0.0, 1.6)
+	var p := base + off
+	if world and world.has_method("on_ground"):
+		return world.on_ground(p, 0.1)
+	return p
 
 
 ## The single biggest frame-rate lever in a 32-player match.
@@ -240,7 +337,10 @@ func _check_win_condition() -> void:
 		return
 	var alive: Array[SquadBrain] = []
 	for s in squads:
-		if s.is_alive():
+		# A squad is still in play while ANY member lives OR its Hut still stands
+		# (dead members will respawn there). Only a squad with no living member and
+		# no Hut is truly out — GDD §6: no respawn anchor = permanent elimination.
+		if s.is_alive() or s.has_standing_hut():
 			alive.append(s)
 		elif not s.get_meta("eliminated", false):
 			s.set_meta("eliminated", true)
@@ -297,6 +397,51 @@ func _end_match(winner: SquadBrain) -> void:
 # ═══════════════════════════════════════════════════════════════════════════════
 #  QUERIES (used by the HUD, minimap and ransom board)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+## Vote to Exile (GDD §11). The player calls the vote on a squadmate; the three
+## bot members vote yes if that member looks suspicious (low trust or already
+## revealed). 3 of 4 yes → exiled. Returns a result dict for the HUD.
+func call_exile_vote(target: Actor) -> Dictionary:
+	if GameManager.match_time < Constants.TRAITOR_ACTIVATION_UNLOCK_TIME:
+		return {"ok": false, "reason": "Voting unlocks at minute 8"}
+	if player_squad == null or not player_squad.members.has(target):
+		return {"ok": false, "reason": "Not in your squad"}
+
+	var yes := 1   # the player initiates, so the player votes yes
+	for m in player_squad.members:
+		if m == target or m == player_actor or not is_instance_valid(m):
+			continue
+		# A bot votes to exile a member it distrusts.
+		if target.traitor_activated or target.trust_score < 55.0:
+			yes += 1
+
+	if yes >= 3:
+		var was_traitor: bool = target.has_traitor_token
+		_exile(target)
+		return {"ok": true, "exiled": true, "was_traitor": was_traitor, "yes": yes}
+	return {"ok": true, "exiled": false, "yes": yes}
+
+
+func _exile(target: Actor) -> void:
+	if player_squad.members.has(target):
+		player_squad.members.erase(target)
+	# Thrown out with nothing (GDD §11): items dropped, marked, no longer squad.
+	for k in target.inventory.keys():
+		target.inventory[k] = 0
+	target.set_meta("exiled", true)
+	target.has_traitor_token = false
+	var justice: bool = target.traitor_activated
+	target.squad_id = "exiled_" + target.squad_id   # now hostile to its old squad
+	if justice:
+		# Correctly caught the traitor (GDD §9): reward + Justice Served moment.
+		player_squad.add_coins(10, "justice_served")
+		if EventBus.has_signal("moment_triggered"):
+			EventBus.moment_triggered.emit("justice_served", target)
+
+
+func can_vote_exile() -> bool:
+	return GameManager.match_time >= Constants.TRAITOR_ACTIVATION_UNLOCK_TIME
+
 
 func squad_by_id(id: String) -> SquadBrain:
 	for s in squads:

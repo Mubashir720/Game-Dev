@@ -349,6 +349,18 @@ func is_alive() -> bool:
 	return alive_count() > 0
 
 
+## GDD §6: the Hut is the respawn anchor. A squad can respawn its dead members
+## only while at least one Hut still stands. No Hut → deaths are permanent.
+func has_standing_hut() -> bool:
+	for s in structures:
+		if not is_instance_valid(s):
+			continue
+		var t := String(s.get_meta("structure_type", ""))
+		if t == "hut" or t == "hut_upgraded":
+			return true
+	return false
+
+
 func assign_traitor(member: Actor) -> void:
 	traitor = member
 	member.has_traitor_token = true

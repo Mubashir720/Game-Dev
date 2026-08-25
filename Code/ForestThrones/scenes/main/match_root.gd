@@ -20,6 +20,8 @@ const BeastFactory = preload("res://scenes/beasts/beast_factory.gd")
 const ZoneShrinkScript = preload("res://scenes/zone_shrink/zone_shrink.gd")
 const MomentsEngineScript = preload("res://scenes/moments/moments_engine.gd")
 const ForestCurseScript = preload("res://scenes/curse/forest_curse.gd")
+const BlackMarketScript = preload("res://scenes/economy/black_market.gd")
+const TrustSystemScript = preload("res://scenes/traitor/trust_system.gd")
 
 signal loading_progress(fraction: float, stage: String)
 signal match_started()
@@ -70,6 +72,7 @@ func _boot() -> void:
 	loading_progress.emit(0.96, "Raising camps")
 	await get_tree().process_frame
 	_seed_squad_camps()
+	_spawn_vendors()
 
 	_attach_systems()
 	_attach_camera()
@@ -109,10 +112,15 @@ func _spawn_wildlife() -> void:
 			beast.set_meta("centre_patrol", true)
 
 
+## Spawn a real beast ACTOR (beast_base drives AI, hunger, taming and companion
+## combat, and builds its own visual), not just a decorative mesh. Without this
+## the map had wolves you could see but never tame or fight.
+const BeastBaseScript = preload("res://scenes/beasts/beast_base.gd")
+
 func _add_beast(type: String, pos: Vector3) -> Node3D:
-	var beast := BeastFactory.build_beast(type, false)
-	if beast == null:
-		return null
+	var beast := CharacterBody3D.new()
+	beast.set_script(BeastBaseScript)
+	beast.beast_type = type
 	beast.position = pos
 	world.add_child(beast)
 	return beast
@@ -125,6 +133,21 @@ func _seed_squad_camps() -> void:
 	for brain in director.squads:
 		brain.place_structure("hut", world.on_ground(brain.base_position))
 		brain.build_index = 1
+
+
+## The two always-open NPC vendors (GDD §3, §7). The map already draws a stall
+## mesh at ±40 grid columns (x = ±80 world); we drop an interactable vendor on
+## each so a coin-rich squad can actually buy food, water, bandages and an edge.
+const NpcVendorScript = preload("res://scenes/economy/npc_vendor.gd")
+
+func _spawn_vendors() -> void:
+	for vx in [-80.0, 80.0]:
+		var v := NpcVendorScript.new()
+		v.name = "NpcVendor"
+		v.add_to_group("vendors")
+		v.position = world.on_ground(Vector3(vx, 0.0, 0.0), 0.1) if world.has_method("on_ground") \
+				else Vector3(vx, 0.0, 0.0)
+		world.add_child(v)
 
 
 func _attach_camera() -> void:
@@ -158,6 +181,16 @@ func _attach_systems() -> void:
 	var curse = ForestCurseScript.new()
 	curse.name = "ForestCurse"
 	add_child(curse)
+
+	var market = BlackMarketScript.new()
+	market.name = "BlackMarket"
+	add_child(market)
+	market.setup(director, world)
+
+	var trust = TrustSystemScript.new()
+	trust.name = "TrustSystem"
+	add_child(trust)
+	trust.setup(director)
 
 
 ## The post-match summary lives with the match, not the menu, so it can read the

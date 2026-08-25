@@ -37,6 +37,7 @@ enum Goal {
 	DRINK,           ## Go to water when thirst is low
 	FORAGE,          ## Go to food when hunger is low
 	MIGRATE,         ## Move toward the shrinking zone centre
+	HUNT,            ## Finish a downed enemy — execute, or capture and carry home
 }
 
 const THINK_INTERVAL := 0.40
@@ -62,6 +63,10 @@ var _detour := Vector3.ZERO
 var _detour_timer := 0.0
 var _harvest_cooldown := 0.0
 
+## A downed enemy this bot has slung over its shoulder and is carrying to its cage.
+var _prisoner: Actor = null
+var _capture_intent := ""   ## "" | "execute" | "capture" — decided on reaching the body
+
 ## Personality — small per-bot variance so a squad doesn't move as one organism.
 var aggression := 0.5
 var caution := 0.5
@@ -82,6 +87,11 @@ func setup(index: int, brain, world_node, match_director) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# A captor that goes down drops its prisoner — the body can't be carried by
+	# someone who is themselves crawling or dead (GDD §10: rescue window).
+	if _prisoner != null and (hp_state == HPState.DOWNED or hp_state == HPState.DEAD):
+		_drop_prisoner()
+
 	if hp_state == HPState.DEAD:
 		move_intent = Vector3.ZERO
 		super._physics_process(delta)
@@ -96,6 +106,9 @@ func _physics_process(delta: float) -> void:
 		_decide()
 
 	_act(delta)
+	# Carrying a prisoner slows the captor to 60% and keeps the body on the shoulder.
+	if _prisoner != null:
+		_update_prisoner_carry()
 	super._physics_process(delta)
 
 
@@ -135,6 +148,25 @@ func _decide() -> void:
 		if global_position.distance_to(centre) > squad_brain.zone_radius() * 0.75:
 			goal = Goal.MIGRATE
 			goal_target = centre
+			return
+
+	# 2.5 A downed enemy nearby is a free kill or a prisoner worth coins — fighters
+	#     break off to secure it (GDD §10). Already carrying one? Keep hauling home.
+	if _prisoner != null:
+		goal = Goal.HUNT
+		return
+	if role == Constants.Role.KING or role == Constants.Role.SOLDIER_A:
+		var prey := _downed_enemy()
+		if prey != null and aggression > 0.35:
+			goal = Goal.HUNT
+			target_actor = prey
+			# Decide once: capture the enemy for ransom, or execute for the loot.
+			# The player is only ever executed (→ clean respawn), never jailed, so a
+			# human is never soft-locked in a cage with no escape UI.
+			if prey.is_bot and randf() < 0.55:
+				_capture_intent = "capture"
+			else:
+				_capture_intent = "execute"
 			return
 
 	# 3. Combat, weighted by role and personality.
@@ -293,6 +325,9 @@ func _act(delta: float) -> void:
 			else:
 				_steer_towards(target_actor.global_position, delta)
 
+		Goal.HUNT:
+			_act_hunt(delta)
+
 		Goal.FLEE, Goal.MIGRATE, Goal.DRINK, Goal.BUILD, Goal.GUARD:
 			if global_position.distance_to(goal_target) > 1.6:
 				_steer_towards(goal_target, delta)
@@ -307,6 +342,130 @@ func _act(delta: float) -> void:
 
 		_:
 			move_intent = Vector3.ZERO
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HUNT — finish or capture a downed enemy (GDD §10)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+func _act_hunt(delta: float) -> void:
+	# Already carrying someone → haul them to the cage and lock them up.
+	if _prisoner != null:
+		if not is_instance_valid(_prisoner) or not _prisoner.is_captured:
+			_drop_prisoner()
+			goal = Goal.IDLE
+			return
+		var cage := _cage_position()
+		if global_position.distance_to(cage) <= DELIVER_RANGE:
+			move_intent = Vector3.ZERO
+			_imprison_carried()
+			goal = Goal.IDLE
+		else:
+			_steer_towards(cage, delta)
+		return
+
+	# Target must still be a capturable downed enemy.
+	if target_actor == null or not is_instance_valid(target_actor) \
+			or not target_actor.is_downed() or target_actor.is_captured or target_actor.is_imprisoned:
+		goal = Goal.IDLE
+		target_actor = null
+		return
+
+	if global_position.distance_to(target_actor.global_position) > 1.6:
+		_steer_towards(target_actor.global_position, delta)
+		return
+
+	# In reach — commit the decision made when the hunt started.
+	move_intent = Vector3.ZERO
+	_face(target_actor.global_position)
+	if _capture_intent == "capture" and target_actor.is_bot:
+		_capture(target_actor)
+	else:
+		_execute(target_actor)
+		target_actor = null
+		goal = Goal.IDLE
+
+
+func _execute(enemy: Actor) -> void:
+	if _animator:
+		_animator.trigger_attack()
+	EventBus.prisoner_executed.emit(self, enemy)
+	EventBus.forest_curse_triggered.emit(squad_id, 2)
+	enemy.kill(self)
+	if squad_brain and squad_brain.has_method("add_coins"):
+		squad_brain.add_coins(10, "execution_loot")
+
+
+func _capture(enemy: Actor) -> void:
+	_prisoner = enemy
+	enemy.set_captured(self)
+	set_carry_state(true, false)
+	if _animator:
+		_animator.trigger_interact()
+	EventBus.player_handcuffed.emit(self, enemy)
+
+
+func _update_prisoner_carry() -> void:
+	if not is_instance_valid(_prisoner) or not _prisoner.is_captured:
+		_drop_prisoner()
+		return
+	_prisoner.global_position = global_position + Vector3(0.0, 1.05, 0.0)
+	_prisoner.velocity = Vector3.ZERO
+	# Arms full: move at 60% (GDD §10). Applied as a soft cap on the intent.
+	move_intent *= 0.6
+
+
+func _imprison_carried() -> void:
+	if not is_instance_valid(_prisoner):
+		_prisoner = null
+		return
+	var p := _prisoner
+	_prisoner = null
+	set_carry_state(false, false)
+	p.global_position = _cage_position() + Vector3(1.2, 0.0, 0.0)
+	p.set_imprisoned_state()
+	EventBus.player_imprisoned.emit(self, p, squad_brain)
+	# A captured enemy Queen is a real prize — post a ransom for the coins.
+	if squad_brain:
+		var amount := 40 if p.role == Constants.Role.QUEEN else 25
+		EventBus.ransom_posted.emit(squad_id, p, amount)
+		squad_brain.add_coins(amount, "ransom")
+
+
+func _drop_prisoner() -> void:
+	if is_instance_valid(_prisoner):
+		_prisoner.release_prisoner()
+	_prisoner = null
+	set_carry_state(false, false)
+
+
+## Where this squad locks prisoners: its Cage if one is built, else the Hut/base.
+func _cage_position() -> Vector3:
+	if squad_brain:
+		for s in squad_brain.structures:
+			if is_instance_valid(s) and String(s.get_meta("structure_type", "")).begins_with("cage"):
+				return s.global_position
+	return _base_position()
+
+
+func _downed_enemy() -> Actor:
+	if director == null:
+		return null
+	var best: Actor = null
+	var best_d := (VISION_RADIUS * 0.7) * (VISION_RADIUS * 0.7)
+	for a in director.actors:
+		if a == self or not is_instance_valid(a):
+			continue
+		var hostile: bool = a.squad_id != squad_id or traitor_activated or a.traitor_activated
+		if not hostile:
+			continue
+		if not a.is_downed() or a.is_captured or a.is_imprisoned:
+			continue
+		var d: float = global_position.distance_squared_to(a.global_position)
+		if d < best_d:
+			best_d = d
+			best = a
+	return best
 
 
 ## Move toward a point, with a short sidestep when we bump into scenery.

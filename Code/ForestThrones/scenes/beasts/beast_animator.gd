@@ -1,231 +1,206 @@
 extends Node
+class_name BeastAnimator
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  BEAST ANIMATOR — Production-quality animation for detailed multi-part beasts
-#  Works with named nodes: Body, Head, Tail, LimbPivot_FL/FR/BL/BR, Wing_L/R
+#  BEAST ANIMATOR  ·  v2
+#
+#  Drives the beast rigs ActorBaker preserves: Body, Head, Tail, Wing_L/R and four
+#  LimbPivot_FL/FR/BL/BR — all direct children of the rig root.
+#
+#  FIXED: the old version did `body.position.y += …` and `body.position.z += …`
+#  every frame without ever restoring a base, so the body slowly drifted up and
+#  forward over a match. Base transforms are now cached once and every frame sets
+#  position = base + offset, so motion oscillates around home instead of walking
+#  away from it.
+#
+#  NEW: lunge-and-return attacks (bite / gore / tusk / peck), a hit recoil, and a
+#  death collapse — so wild beasts and companions read as alive and reactive.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-enum BeastAnimState { IDLE, RUN, ATTACK, HOWL_CHARGE, SPECIAL }
+enum St { IDLE, RUN, ATTACK, CHARGE, HIT, DEAD }
 
-var state: BeastAnimState = BeastAnimState.IDLE
-var anim_t: float = 0.0
-var idle_t: float = 0.0  # Separate timer for idle breathing
+var state: St = St.IDLE
+var _t_action := 0.0
+var _action_dur := 0.5
+var _idle_t := 0.0
+var _move_t := 0.0
+var _base: Dictionary = {}     # instance_id -> {node_name: Transform3D}
 
-func animate_beast(beast_node: Node3D, beast_type: String, is_moving: bool, delta: float) -> void:
-	if not is_instance_valid(beast_node):
+
+func animate_beast(node: Node3D, beast_type: String, is_moving: bool, delta: float) -> void:
+	if not is_instance_valid(node):
+		return
+	var b := _parts(node)
+	if b.is_empty():
 		return
 
-	# Find named parts (safe lookups)
-	var body := _find_child(beast_node, "Body")
-	var head := _find_child(beast_node, "Head")
-	var tail := _find_child(beast_node, "Tail")
-	var fl := _find_child(beast_node, "LimbPivot_FL")
-	var fr := _find_child(beast_node, "LimbPivot_FR")
-	var bl := _find_child(beast_node, "LimbPivot_BL")
-	var br := _find_child(beast_node, "LimbPivot_BR")
+	_idle_t += delta
+	_move_t += delta * (10.0 if is_moving else 0.0)
+	if state != St.DEAD:
+		if state == St.IDLE or state == St.RUN:
+			state = St.RUN if is_moving else St.IDLE
 
-	idle_t += delta * 2.0
+	if state == St.ATTACK or state == St.CHARGE or state == St.HIT:
+		_t_action += delta / max(_action_dur, 0.001)
+		if _t_action >= 1.0:
+			_t_action = 0.0
+			state = St.IDLE
 
-	if is_moving:
-		anim_t += delta * 10.0
-		_animate_locomotion(beast_type, body, head, tail, fl, fr, bl, br, anim_t)
+	# Reset every driven part to its cached base, then add motion.
+	var body: Node3D = b.body
+	var head: Node3D = b.head
+	var tail: Node3D = b.tail
+	var legs := [b.fl, b.fr, b.bl, b.br]
+	if body: body.transform = b.base_body
+	if head: head.transform = b.base_head
+	if tail: tail.transform = b.base_tail
+	for i in range(4):
+		if legs[i]: (legs[i] as Node3D).transform = (b.base_legs[i] as Transform3D)
+
+	# ── Locomotion / idle base ──
+	if state == St.RUN:
+		var t := _move_t
+		var stride := 0.4
+		var bob := 0.05
+		match beast_type:
+			"boar", "war_boar": stride = 0.3; bob = 0.035
+			"stag", "great_stag": stride = 0.48; bob = 0.06
+			"raven", "storm_raven": stride = 0.14; bob = 0.07
+		if body:
+			body.position.y += absf(sin(t)) * bob
+			body.rotation.z += sin(t) * 0.03
+		if head:
+			head.rotation.x += sin(t * 2.0 + PI * 0.5) * 0.06
+		# Trot gait: diagonal pairs in phase.
+		if b.fl: (b.fl as Node3D).rotation.x += sin(t) * stride
+		if b.br: (b.br as Node3D).rotation.x += sin(t) * stride
+		if b.fr: (b.fr as Node3D).rotation.x += sin(t + PI) * stride
+		if b.bl: (b.bl as Node3D).rotation.x += sin(t + PI) * stride
+		if tail: tail.rotation.y += sin(t * 1.5) * 0.18
 	else:
-		_animate_idle(beast_type, body, head, tail, fl, fr, bl, br, idle_t, delta)
+		var t := _idle_t
+		if body: body.scale = b.base_body.basis.get_scale() * (1.0 + sin(t * 1.6) * 0.012)
+		if head:
+			head.rotation.y += sin(t * 0.7) * 0.08
+			head.rotation.x += sin(t * 1.1) * 0.03
+		if tail: tail.rotation.y += sin(t * 1.3) * 0.12
 
-	# State-based overlays
+	# ── Action overlays ──
 	match state:
-		BeastAnimState.ATTACK:
-			anim_t += delta * 12.0
-			_play_beast_attack(beast_type, body, head, tail, fl, fr, anim_t)
-			if anim_t >= PI:
-				state = BeastAnimState.IDLE
-				anim_t = 0.0
+		St.ATTACK:
+			var lunge := _bell(_t_action, 0.4, 0.26)
+			if body: body.position.z += lunge * 0.45
+			match beast_type:
+				"wolf", "dire_wolf":
+					if head: head.rotation.x += -lunge * 0.9        # snap bite down
+				"boar", "war_boar":
+					if head: head.rotation.x += lunge * 0.9         # tusk gore up
+				"stag", "great_stag":
+					if head: head.rotation.x += -lunge * 0.8        # antler sweep
+				"raven", "storm_raven":
+					if head: head.rotation.x += -lunge * 1.0
+					if body: body.position.y += -lunge * 0.2        # dive peck
+				_:
+					if head: head.rotation.x += -lunge * 0.8
+			if b.fl: (b.fl as Node3D).rotation.x += -lunge * 0.3
+			if b.fr: (b.fr as Node3D).rotation.x += -lunge * 0.3
+		St.CHARGE:
+			var r := sin(_t_action * PI)
+			match beast_type:
+				"wolf", "dire_wolf":
+					if head: head.rotation.x += deg_to_rad(-50) * r  # howl
+				"boar", "war_boar":
+					if body: body.rotation.z += sin(_t_action * 18.0) * 0.06
+					if head: head.rotation.x += deg_to_rad(-14) * r
+				"stag", "great_stag":
+					if body: body.rotation.x += -0.14 * r            # rear up
+				_:
+					if head: head.rotation.x += deg_to_rad(-24) * r
+		St.HIT:
+			var recoil := (1.0 - _t_action) * (1.0 - _t_action)
+			if body:
+				body.position.z += -recoil * 0.18
+				body.rotation.z += recoil * 0.12
+			if head: head.rotation.x += recoil * 0.3
+		_:
+			pass
 
-		BeastAnimState.HOWL_CHARGE:
-			anim_t += delta * 6.0
-			_play_howl_charge(beast_type, body, head, tail, anim_t)
-			if anim_t >= PI:
-				state = BeastAnimState.IDLE
-				anim_t = 0.0
+	if state == St.DEAD:
+		# Collapse onto side and sink.
+		if body:
+			body.rotation.z += deg_to_rad(85)
+			body.position.y += -0.25
+		for l in legs:
+			if l: (l as Node3D).rotation.x += -0.6
 
-	# Raven wing flap (always active if moving or special state)
+	# Raven wing flap.
 	if beast_type in ["raven", "storm_raven"]:
-		var wing_l := _find_child(beast_node, "Wing_L")
-		var wing_r := _find_child(beast_node, "Wing_R")
-		_animate_wings(wing_l, wing_r, is_moving, idle_t, delta)
+		var wl = b.get("wl")
+		var wr = b.get("wr")
+		var flap := (sin(_move_t * 6.0) * 0.5) if is_moving else (sin(_idle_t * 1.5) * 0.06)
+		if wl: (wl as Node3D).rotation.z = -flap
+		if wr: (wr as Node3D).rotation.z = flap
 
 
+# ── Triggers ─────────────────────────────────────────────────────────────────
 func trigger_beast_attack() -> void:
-	state = BeastAnimState.ATTACK
-	anim_t = 0.0
+	if state == St.DEAD: return
+	state = St.ATTACK; _action_dur = 0.55; _t_action = 0.0
 
 func trigger_howl_charge() -> void:
-	state = BeastAnimState.HOWL_CHARGE
-	anim_t = 0.0
+	if state == St.DEAD: return
+	state = St.CHARGE; _action_dur = 0.9; _t_action = 0.0
+
+func trigger_hit() -> void:
+	if state == St.DEAD: return
+	state = St.HIT; _action_dur = 0.3; _t_action = 0.0
+
+func set_dead(b: bool) -> void:
+	state = St.DEAD if b else St.IDLE
 
 
-# ─── IDLE ANIMATION (Breathing, subtle sway) ─────────────────────────────────
-func _animate_idle(beast_type: String, body: Node3D, head: Node3D, tail: Node3D,
-		fl: Node3D, fr: Node3D, bl: Node3D, br: Node3D, t: float, delta: float) -> void:
-	# Gentle breathing on body
-	if body:
-		body.scale.y = 1.0 + sin(t) * 0.012
-	# Head subtle look-around
-	if head:
-		head.rotation.y = move_toward(head.rotation.y, sin(t * 0.7) * 0.08, delta * 1.5)
-		head.rotation.x = move_toward(head.rotation.x, sin(t * 1.1) * 0.03, delta * 1.5)
-	# Tail gentle sway
-	if tail:
-		match beast_type:
-			"wolf", "dire_wolf":
-				tail.rotation.y = sin(t * 1.3) * 0.15
-			"stag", "great_stag":
-				tail.rotation.x = sin(t * 1.5) * 0.05
-			"boar", "war_boar":
-				tail.rotation.y = sin(t * 2.0) * 0.1
-	# Legs return to rest
-	for limb in [fl, fr, bl, br]:
-		if limb:
-			limb.rotation.x = move_toward(limb.rotation.x, 0.0, delta * 3.0)
+# ── Part lookup + base-transform cache ───────────────────────────────────────
+func _parts(node: Node3D) -> Dictionary:
+	var id := node.get_instance_id()
+	var cached: Dictionary = _base.get(id, {})
+	if not cached.is_empty() and is_instance_valid(cached.get("body")):
+		return cached
+	var body := _find(node, "Body")
+	var head := _find(node, "Head")
+	var tail := _find(node, "Tail")
+	var fl := _find(node, "LimbPivot_FL")
+	var fr := _find(node, "LimbPivot_FR")
+	var bl := _find(node, "LimbPivot_BL")
+	var br := _find(node, "LimbPivot_BR")
+	if body == null:
+		return {}
+	var d := {
+		"body": body, "head": head, "tail": tail,
+		"fl": fl, "fr": fr, "bl": bl, "br": br,
+		"wl": _find(node, "Wing_L"), "wr": _find(node, "Wing_R"),
+		"base_body": body.transform,
+		"base_head": (head.transform if head else Transform3D.IDENTITY),
+		"base_tail": (tail.transform if tail else Transform3D.IDENTITY),
+		"base_legs": [
+			(fl.transform if fl else Transform3D.IDENTITY),
+			(fr.transform if fr else Transform3D.IDENTITY),
+			(bl.transform if bl else Transform3D.IDENTITY),
+			(br.transform if br else Transform3D.IDENTITY),
+		],
+	}
+	_base[id] = d
+	return d
 
-
-# ─── LOCOMOTION (Walk/run cycle with leg swing, body bob, head bob) ──────────
-func _animate_locomotion(beast_type: String, body: Node3D, head: Node3D, tail: Node3D,
-		fl: Node3D, fr: Node3D, bl: Node3D, br: Node3D, t: float) -> void:
-	var stride_amplitude := 0.35
-	var bob_amplitude := 0.04
-
-	match beast_type:
-		"boar", "war_boar":
-			stride_amplitude = 0.28  # Shorter legs, faster cadence
-			bob_amplitude = 0.03
-		"stag", "great_stag":
-			stride_amplitude = 0.45  # Longer, more graceful strides
-			bob_amplitude = 0.05
-		"raven", "storm_raven":
-			stride_amplitude = 0.12  # Minimal leg movement (mostly hopping)
-			bob_amplitude = 0.06
-
-	# Body vertical bob
-	if body:
-		body.position.y += sin(t * 2.0) * bob_amplitude
-
-	# Head forward bob (counter to body)
-	if head:
-		head.rotation.x = sin(t * 2.0 + PI * 0.5) * 0.06
-
-	# Leg swing (diagonal pairs move together — trot gait)
-	if fl:
-		fl.rotation.x = sin(t) * stride_amplitude
-	if br:
-		br.rotation.x = sin(t) * stride_amplitude  # Same phase as FL
-	if fr:
-		fr.rotation.x = sin(t + PI) * stride_amplitude  # Opposite phase
-	if bl:
-		bl.rotation.x = sin(t + PI) * stride_amplitude  # Opposite phase
-
-	# Tail movement during run
-	if tail:
-		match beast_type:
-			"wolf", "dire_wolf":
-				tail.rotation.y = sin(t * 1.5) * 0.2
-				tail.rotation.x = sin(t * 0.8) * 0.08
-			"stag", "great_stag":
-				tail.rotation.x = 0.2 + sin(t) * 0.1  # Tail up when running
-			"boar", "war_boar":
-				tail.rotation.y = sin(t * 3.0) * 0.15  # Fast wagging
-
-
-# ─── ATTACK ANIMATION ────────────────────────────────────────────────────────
-func _play_beast_attack(beast_type: String, body: Node3D, head: Node3D, tail: Node3D,
-		fl: Node3D, fr: Node3D, t: float) -> void:
-	var lunge = sin(t) * 0.5
-
-	# Body lunges forward
-	if body:
-		body.position.z += lunge
-
-	match beast_type:
-		"wolf", "dire_wolf":
-			# Bite snap — head lunges forward and snaps
-			if head:
-				head.rotation.x = sin(t * 2.5) * 0.5
-				head.position.z += lunge * 0.4
-		"boar", "war_boar":
-			# Tusk gore — head goes down then thrusts upward
-			if head:
-				head.rotation.x = -0.4 + sin(t) * 0.6
-		"stag", "great_stag":
-			# Antler thrust — head sweeps forward and up
-			if head:
-				head.rotation.x = 0.3 - sin(t) * 0.5
-		"raven", "storm_raven":
-			# Diving peck — whole body dips
-			if head:
-				head.rotation.x = sin(t * 3.0) * 0.6
-
-	# Front legs plant during attack
-	if fl:
-		fl.rotation.x = -sin(t) * 0.2
-	if fr:
-		fr.rotation.x = -sin(t) * 0.2
-
-
-# ─── HOWL / CHARGE ANIMATION ─────────────────────────────────────────────────
-func _play_howl_charge(beast_type: String, body: Node3D, head: Node3D, tail: Node3D, t: float) -> void:
-	match beast_type:
-		"wolf", "dire_wolf":
-			# Howl — head tilts up, body tenses
-			if head:
-				head.rotation.x = deg_to_rad(-50.0)
-			if body:
-				body.scale.y = 1.0 + sin(t * 4.0) * 0.02  # Vibrating tension
-			if tail:
-				tail.rotation.x = 0.2  # Tail straight out
-		"boar", "war_boar":
-			# Pawing ground before charge
-			if body:
-				body.rotation.z = sin(t * 3.0) * 0.08
-			if head:
-				head.rotation.x = deg_to_rad(-15.0)  # Head lowered
-		"stag", "great_stag":
-			# Rearing up — majestic pose
-			if body:
-				body.rotation.x = sin(t * 2.0) * -0.15
-			if head:
-				head.rotation.x = deg_to_rad(-20.0)
-		"raven", "storm_raven":
-			# Puffing up — body expands, caw pose
-			if body:
-				body.scale = Vector3(1.0 + sin(t * 3.0) * 0.05, 1.0 + sin(t * 3.0) * 0.08, 1.0)
-			if head:
-				head.rotation.x = deg_to_rad(-30.0)
-
-
-# ─── WING ANIMATION (Raven only) ─────────────────────────────────────────────
-func _animate_wings(wing_l: Node3D, wing_r: Node3D, is_moving: bool, t: float, delta: float) -> void:
-	var target_angle: float
-	if is_moving:
-		# Active flapping
-		target_angle = sin(t * 6.0) * 0.5
-	else:
-		# Idle: slight fold breathing
-		target_angle = sin(t * 1.5) * 0.05
-
-	if wing_l:
-		wing_l.rotation.z = move_toward(wing_l.rotation.z, -target_angle, delta * 8.0)
-	if wing_r:
-		wing_r.rotation.z = move_toward(wing_r.rotation.z, target_angle, delta * 8.0)
-
-
-# ─── UTILITY ─────────────────────────────────────────────────────────────────
-func _find_child(parent: Node3D, child_name: String) -> Node3D:
-	if parent.has_node(child_name):
-		var child = parent.get_node(child_name)
-		if child is Node3D:
-			return child
-	# Fallback: search immediate children
-	for child in parent.get_children():
-		if child is Node3D and child.name == child_name:
-			return child
+func _find(parent: Node3D, name: String) -> Node3D:
+	var stack: Array = [parent]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is Node3D and n.name == name:
+			return n
+		for c in n.get_children():
+			stack.push_back(c)
 	return null
+
+func _bell(x: float, center: float, w: float) -> float:
+	var d := (x - center) / w
+	return exp(-d * d)
